@@ -25,6 +25,12 @@ class Booker(
     private val config: Config,
     private val log: (String) -> Unit,
     private val windowCount: () -> Int,
+    // Writes a line to the log file only (not the screen); safe from any thread.
+    private val trace: (String) -> Unit = {},
+    // Names of the site's cookies, for the login check.
+    private val cookieNames: () -> List<String> = { emptyList() },
+    // Sound/vibration for a warning before the opening.
+    private val warn: () -> Unit = {},
 ) {
     data class Config(
         val url: String,
@@ -56,10 +62,28 @@ class Booker(
      * Called from WebViewClient.shouldInterceptRequest for every request. Images, styles,
      * fonts and tracking do not tell us whether a click reached the site, so they are skipped.
      */
-    fun onRequest(url: String, accept: String?) {
+    fun onRequest(url: String, accept: String?, method: String = "GET") {
         if (accept != null && (accept.startsWith("image/") || accept.startsWith("text/css"))) return
-        if (STATIC.containsMatchIn(url) || NOISE.containsMatchIn(url)) return
+        if (STATIC.containsMatchIn(url)) return
+        // After each press every request goes to the log file, so a dry run shows which
+        // servers booking and the queue use.
+        if (localNow() < traceUntil) trace("    → $method ${short(url)}")
+        if (NOISE.containsMatchIn(url)) return
         lastRequestAt = localNow()
+    }
+
+    @Volatile private var traceUntil = 0.0
+
+    /** Warn if no login cookie is visible a minute before the opening. */
+    private fun checkLogin() {
+        val names = runCatching { cookieNames() }.getOrDefault(emptyList()).distinct().sorted()
+        trace("  쿠키 이름: " + names.joinToString(", ").ifEmpty { "(없음)" })
+        if (names.any { it !in GUEST_COOKIES && LOGIN_COOKIE.containsMatchIn(it) }) {
+            log("  로그인 확인: 로그인 쿠키가 있습니다.")
+        } else {
+            log("  ⚠ 로그인이 안 된 것 같습니다. 화면에서 로그인 상태를 확인하세요.")
+            warn()
+        }
     }
 
     /** Called from WebChromeClient for alert/confirm. Returns true if we took it. */
@@ -143,6 +167,8 @@ class Booker(
         if (early) log("  미리 누르기: %.0f ms 일찍 누릅니다".format(lead * 1000))
         val pressAt = openAt - lead
 
+        waitUntil(openAt - 60, "로그인 확인")
+        checkLogin()
         waitUntil(openAt - 10, "버튼 감시 시작")
         val cands = page.describe(labels, keywords)
         if (cands.size > 1 || keywords.isNotEmpty()) {
@@ -169,11 +195,17 @@ class Booker(
         var blocked = ""
         var tries = 0
         var waitedForScroll = false
+        var prevState = first
         while (!clicked) {
             val now = offset.serverNow()
             if (now > openAt + giveUpAfter) break
             val t = page.tick(labels, keywords, scroll = true)
             val state = if (t != null && t.found) t.state else "disabled"
+            if (prevState == "pending" && state == "ready") {
+                // 표시가 내 시계가 아니라 사이트 시계로 사라지는지 예행연습 기록으로 확인한다.
+                log("  '오픈 예정' 표시가 사라짐 (오픈 기준 %+.0f ms)".format((now - openAt) * 1000))
+            }
+            prevState = state
             if (t != null && (state == "ready" || (state == "pending" && now >= pressAt))) {
                 // tick() just scrolled the button into view; give layout one frame.
                 if (!t.inView && !waitedForScroll) {
@@ -186,6 +218,7 @@ class Booker(
                 if (t.inView && t.hit) touch(t.x, t.y)
                 else if (!page.jsClick()) { delay(10); continue }
                 tries++
+                traceUntil = localNow() + TRACE_FOR
                 val clickedAt = offset.serverNow()
                 log("  클릭 ${tries}회째 (오픈 기준 %+.0f ms)".format((clickedAt - openAt) * 1000) + if (t.inView && t.hit) "" else " · 스크립트 클릭")
                 val (result, detail) = afterClick(windowsBefore, urlBefore, t.popups)
@@ -231,6 +264,20 @@ class Booker(
     }
 
     companion object {
+        private const val TRACE_FOR = 10.0
+
+        /** host/path without the query, which can be long and may carry personal tokens. */
+        fun short(url: String): String = runCatching {
+            val u = java.net.URL(url)
+            (u.host + u.path).take(120)
+        }.getOrDefault(url.take(120))
+
+        // Cookies a logged-out visit to NOL already gets; anything login-like beyond these
+        // suggests a session. The real login cookie name is not known yet (see the log's list).
+        private val GUEST_COOKIES = setOf("nol_platform", "nol_device_id", "nol_app_version", "app-device",
+            "cgntId", "yanolja_sid", "cf_clearance", "__cf_bm")
+        private val LOGIN_COOKIE = Regex("access|refresh|token|auth|login|member|jwt|sso|_at$|_rt$", RegexOption.IGNORE_CASE)
+
         // If a press sends nothing to the server within this time, the page ignored it.
         private const val IGNORED_AFTER = 0.25
         private val STATIC = Regex("""\.(png|jpe?g|gif|webp|svg|ico|css|woff2?|ttf|otf|mp4)(\?|$)""", RegexOption.IGNORE_CASE)

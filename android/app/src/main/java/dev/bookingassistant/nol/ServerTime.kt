@@ -41,6 +41,9 @@ data class Offset(
      * One-way trip is about half the round trip; we take the measurement error off that,
      * because arriving early costs a "not open yet" round and arriving late only the difference.
      */
+    /** How good the connection to the time server is, for comparing Wi-Fi and mobile data. */
+    fun speed(): String = (rtt * 1000).let { if (it <= 40) "빠름" else if (it <= 100) "보통" else "느림" }
+
     fun lead(): Double = (rtt / 2 - error).coerceIn(0.0, MAX_LEAD)
 }
 

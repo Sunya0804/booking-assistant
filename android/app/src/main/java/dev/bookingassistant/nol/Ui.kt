@@ -80,6 +80,18 @@ fun TextView.chip(palette: Palette, status: String) {
     accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
 }
 
+/** "와이파이" / "모바일 데이터" / … for the network the phone is using now. */
+fun Context.networkName(): String {
+    val cm = getSystemService(android.net.ConnectivityManager::class.java) ?: return "알 수 없음"
+    val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return "연결 없음"
+    return when {
+        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "와이파이"
+        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "모바일 데이터"
+        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> "유선"
+        else -> "기타"
+    }
+}
+
 /** targetSdk 35+ draws behind the system bars; keep content clear of them and the keyboard. */
 fun View.padForSystemBars() {
     setOnApplyWindowInsetsListener { v, insets ->

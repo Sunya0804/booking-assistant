@@ -283,8 +283,10 @@ class SetupActivity : AppCompatActivity(), CoroutineScope by MainScope() {
             try {
                 val off = withContext(Dispatchers.IO) { measureServers(timeUrls(url.text.toString())) }
                 offset = off
-                clockSub.text = "오프셋 %+.0f ms (서버 - 폰), 오차 ±%.0f ms, 왕복 %.0f ms · %s".format(
-                    off.seconds * 1000, off.error * 1000, off.rtt * 1000, off.host)
+                clockSub.text = ("오프셋 %+.0f ms (서버 - 폰), 오차 ±%.0f ms · %s\n" +
+                    "연결: %s · 왕복 %.0f ms (%s)\n" +
+                    "와이파이와 모바일 데이터를 바꿔 다시 측정해 보고, 왕복이 짧은 쪽으로 예매하세요.").format(
+                    off.seconds * 1000, off.error * 1000, off.host, networkName(), off.rtt * 1000, off.speed())
             } catch (e: Exception) {
                 clockSub.text = "측정 실패: ${e.message} — 인터넷 연결을 확인하고 다시 측정하세요."
                 clockSub.setTextColor(palette.danger)

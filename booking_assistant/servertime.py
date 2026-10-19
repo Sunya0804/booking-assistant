@@ -42,6 +42,11 @@ class Offset:
     def host(self) -> str:
         return urlsplit(self.url).hostname or self.url
 
+    def speed(self) -> str:
+        """How good the connection to the time server is, for comparing Wi-Fi and wired/mobile."""
+        ms = self.rtt * 1000
+        return "빠름" if ms <= 40 else "보통" if ms <= 100 else "느림"
+
     def lead(self) -> float:
         """How early to press so the request reaches the server at the opening.
 

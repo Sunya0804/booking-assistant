@@ -21,6 +21,7 @@ import time
 import winsound
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlsplit
 
 from playwright.sync_api import Locator, Page, sync_playwright
 
@@ -86,6 +87,38 @@ IGNORED_AFTER = 0.25
 
 def _counts_as_request(req) -> bool:
     return req.resource_type in ("document", "xhr", "fetch") and not _NOISE_RE.search(req.url)
+
+
+# After each click, every request and response the page makes for this long goes to the
+# log file (not the screen), so a dry run shows which servers booking and queue use.
+TRACE_FOR = 10.0
+_STATIC_TYPES = ("image", "stylesheet", "font", "media")
+
+
+def _short(url: str) -> str:
+    """host/path without the query, which can be long and may carry personal tokens."""
+    parts = urlsplit(url)
+    return f"{parts.hostname}{parts.path}"[:120]
+
+
+# Cookies a logged-out visit to NOL already gets; anything login-like beyond these
+# suggests a session. The real login cookie name is not known yet (see the log's list).
+_GUEST_COOKIES = {"nol_platform", "nol_device_id", "nol_app_version", "app-device", "cgntId",
+                  "yanolja_sid", "cf_clearance", "__cf_bm"}
+_LOGIN_COOKIE_RE = re.compile(r"access|refresh|token|auth|login|member|jwt|sso|_at$|_rt$", re.I)
+_SITE_RE = re.compile(r"yanolja|interpark|nol\.", re.I)
+
+
+def _check_login(ctx, log: Callable[[str], None], write: Callable[[str], None]) -> None:
+    """Warn if no login cookie is visible a minute before the opening."""
+    names = sorted({c["name"] for c in ctx.cookies() if _SITE_RE.search(c["domain"])})
+    write(f"  쿠키 이름: {', '.join(names) or '(없음)'}")
+    if any(n not in _GUEST_COOKIES and _LOGIN_COOKIE_RE.search(n) for n in names):
+        log("  로그인 확인: 로그인 쿠키가 있습니다.")
+        return
+    log("  ⚠ 로그인이 안 된 것 같습니다. Chrome 창에서 로그인 상태를 확인하세요.")
+    winsound.Beep(1000, 250)
+    winsound.Beep(1000, 250)
 
 
 _POPUP_SELECTOR = ("[role=dialog], [role=alertdialog], [class*=modal], [class*=Modal], "
@@ -232,7 +265,7 @@ def run(url: str, open_at: float, offset: Offset, labels: list[str], keywords: l
 
     log(f"기록 파일: {log_path}")
     log(f"  기준 서버 {offset.host} · 오프셋 {offset.seconds * 1000:+.0f} ms, "
-        f"오차 ±{offset.error * 1000:.0f} ms, 왕복 {offset.rtt * 1000:.0f} ms")
+        f"오차 ±{offset.error * 1000:.0f} ms, 왕복 {offset.rtt * 1000:.0f} ms ({offset.speed()})")
     # 미리 누르기: 요청이 서버에 닿는 시간만큼 일찍 눌러 정각에 도착하게 한다.
     lead = offset.lead() if early else 0.0
     if early:
@@ -243,9 +276,27 @@ def run(url: str, open_at: float, offset: Offset, labels: list[str], keywords: l
             str(PROFILE_DIR), channel="chrome", headless=False, no_viewport=True,
         )
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        # Times of requests the page sends to its servers; tells an ignored click from a slow one.
+        requests: list[float] = []
+        trace_until = [0.0]
+
+        def on_request(req) -> None:
+            if _counts_as_request(req):
+                requests.append(time.time())
+            if time.time() < trace_until[0] and req.resource_type not in _STATIC_TYPES:
+                write(f"    → {req.method} {_short(req.url)}")
+
+        def on_response(resp) -> None:
+            if time.time() < trace_until[0] and resp.request.resource_type not in _STATIC_TYPES:
+                write(f"    ← {resp.status} {_short(resp.url)}")
+
+        ctx.on("request", on_request)
+        ctx.on("response", on_response)
         page.goto(url)
         log("브라우저가 열렸습니다. 로그인이 안 되어 있다면 지금 로그인하고, 날짜/회차를 미리 골라두세요.")
 
+        _wait_until(offset, open_at - 60, "로그인 확인", log, stop)
+        _check_login(ctx, log, write)
         _wait_until(offset, open_at - 10, "버튼 감시 시작", log, stop)
         cands = describe_candidates(page, labels, keywords)
         if len(cands) > 1 or keywords:
@@ -264,9 +315,6 @@ def run(url: str, open_at: float, offset: Offset, labels: list[str], keywords: l
                 pass
 
         page.on("dialog", on_dialog)
-        # Times of requests the page sends to its servers; tells an ignored click from a slow one.
-        requests: list[float] = []
-        ctx.on("request", lambda req: requests.append(time.time()) if _counts_as_request(req) else None)
 
         btn = _find_button(page, labels, keywords)
         first_state = _state(btn) if btn is not None else None
@@ -285,6 +333,7 @@ def run(url: str, open_at: float, offset: Offset, labels: list[str], keywords: l
         blocked = ""
         tries = 0
         reloaded_at = None
+        prev_state = first_state
         while not clicked:
             if stop.is_set():
                 raise Stopped
@@ -295,6 +344,10 @@ def run(url: str, open_at: float, offset: Offset, labels: list[str], keywords: l
             if btn is None:
                 btn = _find_button(page, labels, keywords)
             state = _state(btn) if btn is not None else "disabled"
+            if prev_state == "pending" and state == "ready":
+                # 표시가 내 시계가 아니라 사이트 시계로 사라지는지 예행연습 기록으로 확인한다.
+                log(f"  '오픈 예정' 표시가 사라짐 (오픈 기준 {(now - open_at) * 1000:+.0f} ms)")
+            prev_state = state
             if state == "ready" or (state == "pending" and now >= press_at):
                 pages_before, url_before = len(page.context.pages), page.url
                 popups_before = len(_not_open_popups(page))
@@ -305,6 +358,7 @@ def run(url: str, open_at: float, offset: Offset, labels: list[str], keywords: l
                     time.sleep(0.01)
                     continue
                 tries += 1
+                trace_until[0] = time.time() + TRACE_FOR
                 clicked_at = offset.server_now()
                 log(f"  클릭 {tries}회째 (오픈 기준 {(clicked_at - open_at) * 1000:+.0f} ms)")
                 result, detail = _after_click(page, pages_before, url_before, dialogs, popups_before, requests)

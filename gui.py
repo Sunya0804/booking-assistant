@@ -413,7 +413,7 @@ class App:
                 self.offset = off
                 diff = "빠름" if off.seconds < 0 else "느림"
                 text = (f"내 PC가 {abs(off.seconds) * 1000:.0f} ms {diff}  ·  오차 ±{off.error * 1000:.0f} ms"
-                        f"  ·  {off.host}")
+                        f"  ·  왕복 {off.rtt * 1000:.0f} ms ({off.speed()})  ·  {off.host}")
                 self.root.after(0, self.offset_var.set, text)
             except Exception as exc:
                 self.root.after(0, self.offset_var.set, "측정 실패 — 인터넷 연결을 확인하세요")

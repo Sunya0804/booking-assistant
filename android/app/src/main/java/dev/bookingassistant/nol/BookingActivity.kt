@@ -115,7 +115,7 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
             openAt = config.openAt
             logFile = newLogFile()
             shareBtn.visibility = View.VISIBLE
-            booker = Booker(web, config, ::log) { popups.size }
+            booker = Booker(web, config, ::log, { popups.size }, ::trace, ::cookieNames, ::warn)
             job = launch { book(config) }
         } else {
             showStatus("idle")
@@ -137,8 +137,8 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
             log("서버 시간 측정 중: " + urls.joinToString(", ") { Offset(0.0, 0.0, 0.0, it).host })
             val off = withContext(Dispatchers.IO) { measureServers(urls) }
             offset = off
-            log("  기준 서버 %s · 오프셋 %+.0f ms, 오차 ±%.0f ms, 왕복 %.0f ms".format(
-                off.host, off.seconds * 1000, off.error * 1000, off.rtt * 1000))
+            log("  기준 서버 %s · 오프셋 %+.0f ms, 오차 ±%.0f ms, 왕복 %.0f ms (%s · %s)".format(
+                off.host, off.seconds * 1000, off.error * 1000, off.rtt * 1000, networkName(), off.speed()))
             if (config.openAt <= off.serverNow()) {
                 showStatus("fail")
                 log("오픈 시각이 이미 지났습니다.")
@@ -368,11 +368,39 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
         startActivity(Intent.createChooser(send, "기록 공유"))
     }
 
+    /** A line for the log file only; called from WebView threads too. */
+    private fun trace(message: String) {
+        val file = logFile ?: return
+        val server = offset?.let { " (서버 " + stampFormat.format(Instant.ofEpochMilli((it.serverNow() * 1000).toLong())) + ")" } ?: ""
+        synchronized(file) { runCatching { file.appendText("${stampFormat.format(Instant.now())}$server$message\n") } }
+    }
+
+    private fun cookieNames(): List<String> {
+        val cm = CookieManager.getInstance()
+        return listOfNotNull("https://nol.yanolja.com/", "https://tickets.interpark.com/", web.url)
+            .flatMap { url -> cm.getCookie(url).orEmpty().split(';') }
+            .map { it.substringBefore('=').trim() }
+            .filter { it.isNotEmpty() }
+    }
+
+    /** Two short buzzes and beeps: something needs a look before the opening. */
+    private fun warn() {
+        runCatching {
+            val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 60)
+            tone.startTone(ToneGenerator.TONE_PROP_BEEP2, 300)
+            web.postDelayed({ tone.release() }, 600)
+        }
+        runCatching {
+            getSystemService(Vibrator::class.java)
+                ?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 150, 100, 150), -1))
+        }
+    }
+
     private fun log(message: String) {
         logFile?.let { file ->
             val now = Instant.now()
             val server = offset?.let { " (서버 " + stampFormat.format(Instant.ofEpochMilli((it.serverNow() * 1000).toLong())) + ")" } ?: ""
-            runCatching { file.appendText("${stampFormat.format(now)}$server  $message\n") }
+            synchronized(file) { runCatching { file.appendText("${stampFormat.format(now)}$server  $message\n") } }
         }
         lastLine.text = message.trim()
         logView.append(if (logView.text.isEmpty()) message else "\n$message")
@@ -460,7 +488,7 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
 
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
             // Runs off the main thread; only notes that the page talked to a server.
-            booker?.onRequest(request.url.toString(), request.requestHeaders["Accept"])
+            booker?.onRequest(request.url.toString(), request.requestHeaders["Accept"], request.method)
             return null
         }
 

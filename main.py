@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from datetime import datetime
 
@@ -45,6 +46,8 @@ def cmd_run(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    # The Windows console (cp949) cannot print every character the log uses, such as ⚠.
+    sys.stdout.reconfigure(errors="replace")
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--time-url", help="서버 시간을 잴 주소 (기본: 예매 서버와 공연 페이지 중 가장 정확한 곳)")
     sub = p.add_subparsers(dest="cmd", required=True)

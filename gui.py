@@ -3,39 +3,42 @@ from __future__ import annotations
 
 import ctypes
 import json
+import os
 import queue
+import sys
+from pathlib import Path
 import threading
 import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk
+from tkinter import font as tkfont
 
 import sv_ttk
 
 from booking_assistant import __version__, updater
-from booking_assistant.browser import PROFILE_DIR, Stopped, run
+from booking_assistant.browser import LOG_DIR, PROFILE_DIR, Stopped, run
 from booking_assistant.inputfmt import normalize_date, normalize_time, parse_open_at
-from booking_assistant.servertime import Offset, measure_best
+from booking_assistant.servertime import Offset, measure_servers, time_urls
 
-TIME_URL = "https://tickets.interpark.com/"
 SETTINGS = PROFILE_DIR.parent / "settings.json"
 FONT = "맑은 고딕"
-MONO = "Consolas"
+MONO = "Segoe UI"  # Tk on Windows renders regular Segoe UI with equal-width digits.
 WEEKDAYS = "월화수목금토일"
 UPDATE_EVERY_MS = 6 * 60 * 60 * 1000
 
 # 테마별 색. 나머지 위젯 색은 sv_ttk가 맡는다.
 PALETTE = {
     "light": {
-        "muted": "#6b6f76", "accent": "#005fb8", "danger": "#d93838",
-        "log_bg": "#f6f7f9", "log_fg": "#30343b",
-        "idle": ("#eef0f3", "#5b6068"), "busy": ("#e3eefa", "#005fb8"),
-        "done": ("#e3f6ea", "#17803d"), "fail": ("#fde8e8", "#c42b2b"),
+        "bg": "#f4f6f6", "surface": "#ffffff", "muted": "#586b68",
+        "accent": "#0f766e", "danger": "#b42335", "log_bg": "#ffffff", "log_fg": "#182625",
+        "idle": ("#e4eeeb", "#354f49"), "busy": ("#ddf2ee", "#0f766e"),
+        "done": ("#d9f4e4", "#17633c"), "fail": ("#fce5e8", "#b42335"),
     },
     "dark": {
-        "muted": "#9aa0a8", "accent": "#57c8ff", "danger": "#ff6b6b",
-        "log_bg": "#232323", "log_fg": "#d8dbe0",
-        "idle": ("#353840", "#b8bdc6"), "busy": ("#1d3a4d", "#7fd4ff"),
-        "done": ("#1f3d2a", "#6fdc96"), "fail": ("#4a2323", "#ff8a8a"),
+        "bg": "#121918", "surface": "#1c2725", "muted": "#a3b7b2",
+        "accent": "#79d5c5", "danger": "#ffb1bb", "log_bg": "#1c2725", "log_fg": "#e5efec",
+        "idle": ("#2d403b", "#cfdfd9"), "busy": ("#173f39", "#79d5c5"),
+        "done": ("#1d4230", "#8de0ad"), "fail": ("#4b2930", "#ffb1bb"),
     },
 }
 
@@ -79,6 +82,8 @@ class App:
         self.keyword_var = tk.StringVar(value=s.get("keywords", ""))
         self.label_var = tk.StringVar(value=s.get("labels", "예매하기, 예매 하기"))
         self.reload_var = tk.StringVar(value=str(s.get("reload_after", 2.0)))
+        self.early_var = tk.BooleanVar(value=bool(s.get("early_press", False)))
+        self.countdown_look: tuple | None = None
         self.clock_var = tk.StringVar(value="--:--:--.---")
         self.offset_var = tk.StringVar(value="서버 시간 측정 중…")
         self.countdown_var = tk.StringVar(value="--:--:--")
@@ -87,6 +92,11 @@ class App:
         self.pending_update: updater.Update | None = None
         self.update_declined = False
 
+        icon_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "assets"
+        self.app_icon = tk.PhotoImage(file=str(icon_dir / "app.png"))
+        root.iconphoto(True, self.app_icon)
+        if sys.platform == "win32":
+            root.iconbitmap(str(icon_dir / "app.ico"))
         self.build()
         self.apply_theme(self.theme)
 
@@ -102,96 +112,107 @@ class App:
 
     # ------------------------------------------------------------------ UI
     def build(self) -> None:
-        outer = ttk.Frame(self.root, padding=(20, 16, 20, 20))
-        outer.pack(fill="both", expand=True)
+        # A scrollable body keeps every field reachable at minimum size and 150% DPI.
+        shell = ttk.Frame(self.root, padding=(16, 8))
+        shell.pack(fill="both", expand=True)
+        shell.columnconfigure(0, weight=1)
+        shell.rowconfigure(0, weight=1)
+        self.canvas = tk.Canvas(shell, highlightthickness=0, borderwidth=0)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        scroll = ttk.Scrollbar(shell, command=self.canvas.yview)
+        scroll.grid(row=0, column=1, sticky="ns")
+        self.canvas.configure(yscrollcommand=scroll.set)
+        outer = ttk.Frame(self.canvas, padding=(0, 8, 8, 8))
+        content = self.canvas.create_window(0, 0, window=outer, anchor="nw")
+        outer.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(content, width=e.width))
+        def wheel(e):
+            if not isinstance(e.widget, tk.Text):
+                self.canvas.yview_scroll(-int(e.delta / 120), "units")
+        self.root.bind_all("<MouseWheel>", wheel, add="+")
         outer.columnconfigure(0, weight=1)
 
-        # 헤더
         head = ttk.Frame(outer)
-        head.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        head.grid(row=0, column=0, sticky="ew", pady=(0, 16))
         head.columnconfigure(0, weight=1)
-        ttk.Label(head, text="NOL 예매 도우미", font=(FONT, 17, "bold")).grid(row=0, column=0, sticky="w")
-        self.sub_lbl = ttk.Label(head, text="정각에 예매 버튼까지, 그다음은 직접", font=(FONT, 9))
-        self.sub_lbl.grid(row=1, column=0, sticky="w")
-        self.theme_btn = ttk.Button(head, width=8, command=self.toggle_theme)
-        self.theme_btn.grid(row=0, column=1, rowspan=2, sticky="e")
+        ttk.Label(head, text="예매 도우미", font=(FONT, 18, "bold")).grid(row=0, column=0, sticky="w")
+        self.sub_lbl = self.small(head, "NOL 티켓 · 정각에 버튼까지, 그다음은 직접")
+        self.sub_lbl.grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self.theme_btn = ttk.Button(head, width=3, command=self.toggle_theme, style="Text.TButton")
+        self.theme_btn.grid(row=0, column=1, rowspan=2)
 
-        # 시계 카드
-        hero = ttk.Frame(outer, style="Card.TFrame", padding=(18, 14))
+        hero = ttk.Frame(outer, style="Card.TFrame", padding=16)
         hero.grid(row=1, column=0, sticky="ew")
         hero.columnconfigure(0, weight=1)
-        self.small(hero, "NOL 서버 시각").grid(row=0, column=0, sticky="w")
-        self.status_lbl = tk.Label(hero, font=(FONT, 9, "bold"), padx=10, pady=2)
+        self.small(hero, "오픈까지 남은 시간").grid(row=0, column=0, sticky="w")
+        self.status_lbl = tk.Canvas(hero, height=28, highlightthickness=0, borderwidth=0)
         self.status_lbl.grid(row=0, column=1, sticky="e")
-        ttk.Label(hero, textvariable=self.clock_var, font=(MONO, 34, "bold")).grid(
-            row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
-        row = ttk.Frame(hero)
-        row.grid(row=2, column=0, columnspan=2, sticky="ew")
-        row.columnconfigure(0, weight=1)
-        self.offset_lbl = self.small(row, textvariable=self.offset_var)
-        self.offset_lbl.grid(row=0, column=0, sticky="w")
-        ttk.Button(row, text="다시 측정", command=self.measure).grid(row=0, column=1, sticky="e")
-
-        ttk.Separator(hero).grid(row=3, column=0, columnspan=2, sticky="ew", pady=12)
-        self.small(hero, "오픈까지").grid(row=4, column=0, sticky="w")
+        self.countdown_lbl = ttk.Label(hero, textvariable=self.countdown_var, font=(MONO, 32))
+        self.countdown_lbl.grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
         self.target_lbl = self.small(hero, textvariable=self.target_var)
-        self.target_lbl.grid(row=4, column=1, sticky="e")
-        self.countdown_lbl = ttk.Label(hero, textvariable=self.countdown_var, font=(MONO, 24, "bold"))
-        self.countdown_lbl.grid(row=5, column=0, columnspan=2, sticky="w")
+        self.target_lbl.grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        ttk.Separator(hero).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        row = ttk.Frame(hero)
+        row.grid(row=4, column=0, columnspan=2, sticky="ew")
+        row.columnconfigure(1, weight=1)
+        self.small(row, "NOL 서버 시각").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Label(row, textvariable=self.clock_var, font=(MONO, 13)).grid(row=0, column=1, sticky="w")
+        ttk.Button(row, text="다시 측정", command=self.measure, style="Text.TButton").grid(row=0, column=2)
+        self.offset_lbl = self.small(hero, textvariable=self.offset_var)
+        self.offset_lbl.grid(row=5, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
-        # 입력 카드
-        form = ttk.Frame(outer, style="Card.TFrame", padding=(18, 14))
-        form.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        form = ttk.Frame(outer, style="Card.TFrame", padding=(16, 8, 16, 16))
+        form.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         form.columnconfigure((0, 1), weight=1, uniform="f")
-
         self.field(form, 0, 0, "공연 페이지 주소", self.url_var, colspan=2)
-        d = self.field(form, 2, 0, "오픈 날짜", self.date_var, hint="20261020, 1020도 가능", padx=(0, 6))
-        t = self.field(form, 2, 1, "오픈 시각", self.time_var, hint="200000, 2000도 가능", padx=(6, 0))
+        d = self.field(form, 2, 0, "오픈 날짜", self.date_var, hint="20261020 · 1020도 가능", padx=(0, 4))
+        t = self.field(form, 2, 1, "오픈 시각", self.time_var, hint="200000 · 2000도 가능", padx=(4, 0))
         for entry, fmt, var in ((d, normalize_date, self.date_var), (t, normalize_time, self.time_var)):
             handler = lambda _e, f=fmt, v=var: self.reformat(v, f)
             entry.bind("<FocusOut>", handler)
             entry.bind("<Return>", handler)
-        self.field(form, 5, 0, "경기/회차 키워드", self.keyword_var, colspan=2,
-                   hint="예매하기 버튼이 여러 개일 때 카드에 적힌 글자 (예: 3차전 · 10월 21일)")
-
+        self.field(form, 5, 0, "경기 / 회차 키워드", self.keyword_var, colspan=2,
+                   hint="버튼이 여러 개일 때 카드의 글자 · 예: 3차전, 10월 21일")
         self.adv_open = tk.BooleanVar(value=False)
-        self.adv_toggle = ttk.Checkbutton(form, text="고급 설정", style="Switch.TCheckbutton",
-                                          variable=self.adv_open, command=self.toggle_advanced)
-        self.adv_toggle.grid(row=8, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        self.adv_toggle = ttk.Button(form, text="▸  고급 설정", command=self.toggle_advanced, style="Text.TButton")
+        ttk.Checkbutton(form, text="미리 누르기", variable=self.early_var, style="Card.TCheckbutton").grid(
+            row=8, column=0, columnspan=2, sticky="w", pady=(12, 0))
+        self.small(form, "요청이 서버에 닿는 시간만큼 일찍 눌러 정각에 도착하게 합니다 (최대 150 ms)").grid(
+            row=9, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self.adv_toggle.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(8, 0), ipady=4)
         self.adv = ttk.Frame(form)
         self.adv.columnconfigure((0, 1), weight=1, uniform="a")
-        self.field(self.adv, 0, 0, "예매 버튼 문구 (쉼표 구분)", self.label_var, padx=(0, 6))
-        self.field(self.adv, 0, 1, "안 열리면 새로고침 (초)", self.reload_var, padx=(6, 0))
+        self.field(self.adv, 0, 0, "예매 버튼 문구 (쉼표 구분)", self.label_var, padx=(0, 4))
+        self.field(self.adv, 0, 1, "새로고침 간격 (초)", self.reload_var, padx=(4, 0))
 
-        # 버튼
         act = ttk.Frame(outer)
-        act.grid(row=3, column=0, sticky="ew", pady=14)
+        act.grid(row=3, column=0, sticky="ew", pady=8)
         act.columnconfigure(0, weight=3)
         act.columnconfigure(1, weight=1)
-        self.start_btn = ttk.Button(act, text="시작  ·  Chrome 열기", style="Accent.TButton", command=self.start)
-        self.start_btn.grid(row=0, column=0, sticky="ew", padx=(0, 8), ipady=6)
+        self.start_btn = tk.Button(act, text="시작  ·  Chrome 열기", command=self.start,
+                                   font=(FONT, 11, "bold"), relief="flat", borderwidth=0, cursor="hand2", pady=12)
+        self.start_btn.grid(row=0, column=0, sticky="ew", padx=(0, 8))
         self.stop_btn = ttk.Button(act, text="중지", command=self.cancel, state="disabled")
-        self.stop_btn.grid(row=0, column=1, sticky="ew", ipady=6)
+        self.stop_btn.grid(row=0, column=1, sticky="nsew")
 
-        # 로그
-        outer.rowconfigure(4, weight=1)
-        logf = ttk.Frame(outer, style="Card.TFrame", padding=(14, 10))
+        logf = ttk.Frame(outer, style="Card.TFrame", padding=16)
         logf.grid(row=4, column=0, sticky="nsew")
         logf.columnconfigure(0, weight=1)
-        logf.rowconfigure(1, weight=1)
-        self.small(logf, "진행 기록").grid(row=0, column=0, sticky="w", pady=(0, 6))
-        upd = ttk.Frame(logf)
-        upd.grid(row=0, column=0, columnspan=2, sticky="e", pady=(0, 6))
-        self.small(upd, textvariable=self.update_var).pack(side="left", padx=(0, 8))
-        ttk.Button(upd, text="업데이트 확인", command=lambda: self.check_update(manual=True)).pack(side="left")
-        self.log_box = tk.Text(logf, height=8, font=(FONT, 9), state="disabled", wrap="word",
-                               relief="flat", borderwidth=0, padx=10, pady=8, highlightthickness=0)
+        self.small(logf, "진행 기록").grid(row=0, column=0, sticky="w", pady=(0, 8))
+        self.log_box = tk.Text(logf, height=5, font=(FONT, 9), state="disabled", wrap="word",
+                               relief="flat", borderwidth=0, padx=0, pady=0, highlightthickness=0)
         self.log_box.grid(row=1, column=0, sticky="nsew")
         sb = ttk.Scrollbar(logf, command=self.log_box.yview)
         sb.grid(row=1, column=1, sticky="ns")
         self.log_box.configure(yscrollcommand=sb.set)
-
-        self.muted_labels.append(self.sub_lbl)
+        footer = ttk.Frame(shell)
+        footer.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        footer.columnconfigure(0, weight=1)
+        self.small(footer, textvariable=self.update_var).grid(row=0, column=0, sticky="w")
+        ttk.Button(footer, text="기록 폴더", style="Text.TButton",
+                   command=self.open_logs).grid(row=0, column=1)
+        ttk.Button(footer, text="업데이트 확인", style="Text.TButton",
+                   command=lambda: self.check_update(manual=True)).grid(row=0, column=2)
 
     def small(self, parent, text: str = "", **kw) -> ttk.Label:
         lbl = ttk.Label(parent, text=text, font=(FONT, 9), **kw)
@@ -201,17 +222,19 @@ class App:
     def field(self, parent, row: int, col: int, label: str, var: tk.StringVar,
               colspan: int = 1, hint: str = "", padx=(0, 0)) -> ttk.Entry:
         ttk.Label(parent, text=label, font=(FONT, 9, "bold")).grid(
-            row=row, column=col, columnspan=colspan, sticky="w", padx=padx, pady=(10, 4))
+            row=row, column=col, columnspan=colspan, sticky="w", padx=padx, pady=(8, 4))
         entry = ttk.Entry(parent, textvariable=var, font=(FONT, 10))
         entry.grid(row=row + 1, column=col, columnspan=colspan, sticky="ew", padx=padx)
         if hint:
             self.small(parent, hint).grid(row=row + 2, column=col, columnspan=colspan,
-                                          sticky="w", padx=padx, pady=(3, 0))
+                                          sticky="w", padx=padx, pady=(4, 0))
         return entry
 
     def toggle_advanced(self) -> None:
+        self.adv_open.set(not self.adv_open.get())
+        self.adv_toggle.configure(text="▾  고급 설정" if self.adv_open.get() else "▸  고급 설정")
         if self.adv_open.get():
-            self.adv.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+            self.adv.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         else:
             self.adv.grid_remove()
 
@@ -223,11 +246,35 @@ class App:
         style = ttk.Style()
         style.configure(".", font=(FONT, 10))
         style.configure("Accent.TButton", font=(FONT, 11, "bold"))
+        style.configure("TFrame", background=pal["bg"])
+        style.configure("Card.TFrame", background=pal["surface"])
+        style.configure("TLabel", background=pal["bg"], foreground=pal["log_fg"])
+        style.configure("Text.TButton", padding=(8, 4), font=(FONT, 9))
+        style.configure("Card.TCheckbutton", background=pal["surface"])
+        self.canvas.configure(bg=pal["bg"])
+        self.start_btn.configure(bg=pal["accent"], fg=pal["surface"] if name == "light" else pal["bg"],
+                                 activebackground=pal["busy"][0], activeforeground=pal["accent"])
+        style.configure("Surface.TFrame", background=pal["surface"])
+        def surfaces(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, (ttk.Label, ttk.Frame)):
+                    parent = child.master
+                    while parent is not None and not (isinstance(parent, ttk.Frame) and parent.cget("style") == "Card.TFrame"):
+                        parent = getattr(parent, "master", None)
+                    if isinstance(child, ttk.Frame):
+                        if parent is not None and child.cget("style") != "Card.TFrame":
+                            child.configure(style="Surface.TFrame")
+                    else:
+                        child.configure(background=pal["surface"] if parent is not None else pal["bg"])
+                surfaces(child)
+        surfaces(self.root)
+        self.log_box.tag_configure("time", foreground=pal["muted"])
+        self.log_box.tag_configure("body", foreground=pal["log_fg"])
         for lbl in self.muted_labels:
             lbl.configure(foreground=pal["muted"])
         self.log_box.configure(bg=pal["log_bg"], fg=pal["log_fg"], insertbackground=pal["log_fg"],
                                selectbackground=pal["accent"])
-        self.theme_btn.configure(text="☀ 라이트" if name == "dark" else "☾ 다크")
+        self.theme_btn.configure(text="☀" if name == "dark" else "☾")
         self.paint_status()
         self.paint_countdown()
         self.dark_titlebar(name == "dark")
@@ -252,11 +299,26 @@ class App:
     def paint_status(self) -> None:
         bg, fg = PALETTE[self.theme][self.status]
         text = self.status_detail or STATUS_TEXT[self.status]
-        self.status_lbl.configure(text=f"●  {text}", bg=bg, fg=fg)
+        text = f"{dict(idle='◷', busy='●', done='✓', fail='!')[self.status]}  {text}"
+        font = tkfont.Font(family=FONT, size=10, weight="bold")
+        pad = self.root.winfo_fpixels("1i") / 96
+        width, height, radius = font.measure(text) + int(24 * pad), int(28 * pad), int(12 * pad)
+        self.status_lbl.configure(width=width, height=height, bg=PALETTE[self.theme]["surface"])
+        self.status_lbl.delete("all")
+        self.status_lbl.create_polygon(radius, 0, width-radius, 0, width, 0, width, radius,
+                                       width, height-radius, width, height, width-radius, height,
+                                       radius, height, 0, height, 0, height-radius, 0, radius, 0, 0,
+                                       smooth=True, fill=bg, outline="")
+        self.status_lbl.create_text(width/2, height/2, text=text, fill=fg, font=font)
 
     def paint_countdown(self, urgent: bool = False) -> None:
         pal = PALETTE[self.theme]
-        self.countdown_lbl.configure(foreground=pal["danger"] if urgent else pal["accent"])
+        active = self.countdown_var.get() not in ("오픈 시각이 지났습니다", "날짜와 시각을 확인하세요", "서버 시각 측정 중…")
+        color = pal["muted"] if not active else pal["danger"] if urgent else pal["accent"]
+        look = (color, MONO if active else FONT, 32 if active else 17)
+        if look != self.countdown_look:  # tick() runs every 30 ms; only touch the widget on a change
+            self.countdown_look = look
+            self.countdown_lbl.configure(foreground=color, font=look[1:])
 
     # ------------------------------------------------------------ settings
     def load_settings(self) -> dict:
@@ -274,6 +336,7 @@ class App:
             "keywords": self.keyword_var.get(),
             "labels": self.label_var.get(),
             "reload_after": self.reload_var.get(),
+            "early_press": self.early_var.get(),
             "theme": self.theme,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -303,7 +366,9 @@ class App:
     def tick(self) -> None:
         while not self.logs.empty():
             self.log_box.configure(state="normal")
-            self.log_box.insert("end", self.logs.get() + "\n")
+            line = self.logs.get()
+            self.log_box.insert("end", line[:10], "time")
+            self.log_box.insert("end", line[10:] + "\n", "body")
             self.log_box.see("end")
             self.log_box.configure(state="disabled")
 
@@ -314,11 +379,12 @@ class App:
             t = datetime.fromtimestamp(target)
             self.target_var.set(f"{t.month}월 {t.day}일({WEEKDAYS[t.weekday()]}) {t:%H:%M:%S}")
 
+        urgent = False
         if self.offset:
             now = self.offset.server_now()
             self.clock_var.set(datetime.fromtimestamp(now).strftime("%H:%M:%S.%f")[:-3])
             if target is None:
-                self.countdown_var.set("--:--:--")
+                self.countdown_var.set("날짜와 시각을 확인하세요")
             elif target > now:
                 left = target - now
                 whole = int(left)
@@ -327,10 +393,14 @@ class App:
                 if whole < 60:
                     text += f".{int((left - whole) * 10)}"
                 self.countdown_var.set(f"{d}일 {text}" if d else text)
-                self.paint_countdown(urgent=left < 60)
+                urgent = left < 60
             else:
-                self.countdown_var.set("오픈됨")
-                self.paint_countdown(urgent=False)
+                self.countdown_var.set("오픈 시각이 지났습니다")
+        if target is None:
+            self.countdown_var.set("날짜와 시각을 확인하세요")
+        elif not self.offset:
+            self.countdown_var.set("서버 시각 측정 중…")
+        self.paint_countdown(urgent)
         self.root.after(30, self.tick)
 
     # -------------------------------------------------------------- actions
@@ -339,10 +409,11 @@ class App:
 
         def work() -> None:
             try:
-                off = measure_best(TIME_URL)
+                off = measure_servers(time_urls(self.url_var.get()))
                 self.offset = off
                 diff = "빠름" if off.seconds < 0 else "느림"
-                text = f"내 PC가 {abs(off.seconds) * 1000:.0f} ms {diff}  ·  오차 ±{off.error * 1000:.0f} ms"
+                text = (f"내 PC가 {abs(off.seconds) * 1000:.0f} ms {diff}  ·  오차 ±{off.error * 1000:.0f} ms"
+                        f"  ·  {off.host}")
                 self.root.after(0, self.offset_var.set, text)
             except Exception as exc:
                 self.root.after(0, self.offset_var.set, "측정 실패 — 인터넷 연결을 확인하세요")
@@ -382,7 +453,7 @@ class App:
             try:
                 self.log("Chrome을 엽니다…")
                 run(url, target, self.offset, labels, keywords, reload_after=reload_after,
-                    give_up_after=20.0, log=self.run_log, stop=self.stop)
+                    give_up_after=20.0, early=self.early_var.get(), log=self.run_log, stop=self.stop)
                 self.log("종료되었습니다.")
             except Stopped:
                 self.log("중지했습니다.")
@@ -441,6 +512,10 @@ class App:
             messagebox.showerror("업데이트", f"설치하지 못했습니다: {exc}")
             return
         self.on_close()
+
+    def open_logs(self) -> None:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        os.startfile(LOG_DIR)
 
     def cancel(self) -> None:
         self.stop.set()

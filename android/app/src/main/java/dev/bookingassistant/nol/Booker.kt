@@ -33,6 +33,8 @@ class Booker(
         val keywords: List<String>,
         val reloadAfter: Double = 2.0,
         val giveUpAfter: Double = 20.0,
+        // 미리 누르기: 요청이 서버에 닿는 시간만큼 일찍 눌러 정각에 도착하게 한다.
+        val early: Boolean = false,
     )
 
     enum class Outcome { CLICKED, BLOCKED, MISSED }
@@ -46,6 +48,19 @@ class Booker(
     /** While armed, page alerts are answered by us instead of being shown. */
     var armed = false
         private set
+
+    // When the page last sent something to its servers (any WebView thread).
+    @Volatile private var lastRequestAt = 0.0
+
+    /**
+     * Called from WebViewClient.shouldInterceptRequest for every request. Images, styles,
+     * fonts and tracking do not tell us whether a click reached the site, so they are skipped.
+     */
+    fun onRequest(url: String, accept: String?) {
+        if (accept != null && (accept.startsWith("image/") || accept.startsWith("text/css"))) return
+        if (STATIC.containsMatchIn(url) || NOISE.containsMatchIn(url)) return
+        lastRequestAt = localNow()
+    }
 
     /** Called from WebChromeClient for alert/confirm. Returns true if we took it. */
     fun onDialog(message: String): Boolean {
@@ -95,10 +110,15 @@ class Booker(
         release.recycle()
     }
 
-    /** Watch what the press did. Returns (result, detail), as in browser._after_click. */
+    /**
+     * Watch what the press did. Returns (result, detail), as in browser._after_click.
+     * "ignored": the page sent nothing to its servers, so it dropped the press itself and
+     * pressing again is safe. "unknown": a request went out but nothing visible came back.
+     */
     private suspend fun afterClick(windowsBefore: Int, urlBefore: String, popupsBefore: Int,
                                    timeout: Double = 2.0): Pair<String, String> {
-        val end = localNow() + timeout
+        val start = localNow()
+        val end = start + timeout
         while (localNow() < end) {
             dialogs.removeFirstOrNull()?.let { msg ->
                 return (if (NOT_OPEN.containsMatchIn(msg)) "not_open" else "blocked") to msg
@@ -110,6 +130,7 @@ class Booker(
                 if ("login" in url.lowercase()) return "blocked" to "로그인 페이지로 이동했습니다. 먼저 로그인해 두세요."
                 return "opened" to url
             }
+            if (localNow() - start >= IGNORED_AFTER && lastRequestAt < start) return "ignored" to ""
             delay(50)
         }
         return "unknown" to ""
@@ -117,7 +138,10 @@ class Booker(
 
     suspend fun run(offset: Offset): Outcome {
         this.offset = offset
-        val (_, openAt, labels, keywords, reloadAfter, giveUpAfter) = config
+        val (_, openAt, labels, keywords, reloadAfter, giveUpAfter, early) = config
+        val lead = if (early) offset.lead() else 0.0
+        if (early) log("  미리 누르기: %.0f ms 일찍 누릅니다".format(lead * 1000))
+        val pressAt = openAt - lead
 
         waitUntil(openAt - 10, "버튼 감시 시작")
         val cands = page.describe(labels, keywords)
@@ -135,7 +159,7 @@ class Booker(
             "ready" -> {
                 // 재오픈(N차) 공연 등: 버튼이 이미 열려 있으면 정각에 누른다.
                 log("  버튼이 이미 활성 상태입니다. 오픈 시각 정각에 누릅니다.")
-                waitUntil(openAt, "오픈")
+                waitUntil(pressAt, "오픈")
             }
             "pending" -> log("  '오픈 예정' 표시가 있습니다. 표시가 사라지거나 정각이 되면 누릅니다.")
             else -> log("  버튼이 비활성 상태입니다. 활성화되는 즉시 누릅니다.")
@@ -150,7 +174,7 @@ class Booker(
             if (now > openAt + giveUpAfter) break
             val t = page.tick(labels, keywords, scroll = true)
             val state = if (t != null && t.found) t.state else "disabled"
-            if (t != null && (state == "ready" || (state == "pending" && now >= openAt))) {
+            if (t != null && (state == "ready" || (state == "pending" && now >= pressAt))) {
                 // tick() just scrolled the button into view; give layout one frame.
                 if (!t.inView && !waitedForScroll) {
                     waitedForScroll = true
@@ -162,12 +186,17 @@ class Booker(
                 if (t.inView && t.hit) touch(t.x, t.y)
                 else if (!page.jsClick()) { delay(10); continue }
                 tries++
-                val late = offset.serverNow() - openAt
-                log("  클릭 ${tries}회째 (오픈 기준 %+.0f ms)".format(late * 1000) + if (t.inView && t.hit) "" else " · 스크립트 클릭")
+                val clickedAt = offset.serverNow()
+                log("  클릭 ${tries}회째 (오픈 기준 %+.0f ms)".format((clickedAt - openAt) * 1000) + if (t.inView && t.hit) "" else " · 스크립트 클릭")
                 val (result, detail) = afterClick(windowsBefore, urlBefore, t.popups)
                 if (result == "not_open") {
                     log("  '오픈 전' 응답 → 닫고 다시 누릅니다 ($detail)")
                     delay(150)
+                    continue
+                }
+                if (result == "ignored") {
+                    // 페이지가 서버에 아무것도 보내지 않았다 = 사이트가 아직 안 열렸다고 보고 버튼을 무시했다.
+                    log("  사이트가 클릭을 무시함 (요청 없음) → 다시 누릅니다")
                     continue
                 }
                 if (result == "blocked") {
@@ -202,6 +231,14 @@ class Booker(
     }
 
     companion object {
+        // If a press sends nothing to the server within this time, the page ignored it.
+        private const val IGNORED_AFTER = 0.25
+        private val STATIC = Regex("""\.(png|jpe?g|gif|webp|svg|ico|css|woff2?|ttf|otf|mp4)(\?|$)""", RegexOption.IGNORE_CASE)
+        private val NOISE = Regex(
+            "google-analytics|googletagmanager|doubleclick|facebook|criteo|kakao.*pixel|/log|/beacon|/collect|analytics|tracking|sentry",
+            RegexOption.IGNORE_CASE,
+        )
+
         // Replies a site gives when a booking button is pressed before the opening.
         val NOT_OPEN = Regex(
             "오픈\\s*전|오픈되지|오픈\\s*예정|아직.{0,10}(오픈|예매|판매)|" +

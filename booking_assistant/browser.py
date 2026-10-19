@@ -27,6 +27,24 @@ from playwright.sync_api import Locator, Page, sync_playwright
 from .servertime import Offset
 
 PROFILE_DIR = Path.home() / ".booking_assistant" / "chrome-profile"
+LOG_DIR = PROFILE_DIR.parent / "logs"
+KEEP_LOGS = 30
+
+
+def _open_log_file(offset: Offset) -> tuple[Path, Callable[[str], None]]:
+    """A file for this run's log; each line gets local and server time to the millisecond."""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    for old in sorted(LOG_DIR.glob("run-*.txt"))[:-KEEP_LOGS + 1]:
+        old.unlink(missing_ok=True)
+    path = LOG_DIR / time.strftime("run-%Y%m%d-%H%M%S.txt")
+    f = open(path, "a", encoding="utf-8", buffering=1)
+
+    def write(msg: str) -> None:
+        now = time.time()
+        stamp = lambda t: time.strftime("%H:%M:%S", time.localtime(t)) + f".{int(t * 1000) % 1000:03d}"
+        f.write(f"{stamp(now)} (서버 {stamp(now + offset.seconds)})  {msg}\n")
+
+    return path, write
 
 
 class Stopped(Exception):
@@ -59,6 +77,17 @@ NOT_OPEN_RE = re.compile(
     r"오픈\s*전|오픈되지|오픈\s*예정|아직.{0,10}(오픈|예매|판매)|"
     r"(예매|판매)\s*(가능\s*)?(시간|기간)이\s*아닙|준비\s*중"
 )
+# Requests that say nothing about whether a click reached the site's servers.
+_NOISE_RE = re.compile(r"google-analytics|googletagmanager|doubleclick|facebook|criteo|kakao.*pixel|"
+                       r"/log|/beacon|/collect|analytics|tracking|sentry", re.I)
+# If a click sends nothing to the server within this time, the page ignored it.
+IGNORED_AFTER = 0.25
+
+
+def _counts_as_request(req) -> bool:
+    return req.resource_type in ("document", "xhr", "fetch") and not _NOISE_RE.search(req.url)
+
+
 _POPUP_SELECTOR = ("[role=dialog], [role=alertdialog], [class*=modal], [class*=Modal], "
                    "[class*=toast], [class*=Toast], [class*=alert], [class*=popup], [class*=Popup]")
 
@@ -157,14 +186,17 @@ def _dismiss(page: Page, popup: Locator) -> None:
 
 
 def _after_click(page: Page, pages_before: int, url_before: str, dialogs: list[str],
-                 popups_before: int, timeout: float = 2.0) -> tuple[str, str]:
+                 popups_before: int, requests: list[float], timeout: float = 2.0) -> tuple[str, str]:
     """Watch what the click did. Returns (result, detail).
 
     result: "not_open" (too early, try again), "blocked" (some other alert),
-            "opened" (new window / page change) or "unknown" (nothing visible).
+            "opened" (new window / page change), "ignored" (the page sent nothing to
+            its servers, so it dropped the click itself and pressing again is safe)
+            or "unknown" (a request went out but nothing visible came back).
     """
     ctx = page.context
-    end = time.time() + timeout
+    start = time.time()
+    end = start + timeout
     while time.time() < end:
         if dialogs:
             msg = dialogs.pop(0)
@@ -180,15 +212,32 @@ def _after_click(page: Page, pages_before: int, url_before: str, dialogs: list[s
             if "login" in page.url.lower():
                 return "blocked", "로그인 페이지로 이동했습니다. 먼저 로그인해 두세요."
             return "opened", page.url
+        if time.time() - start >= IGNORED_AFTER and not any(t >= start for t in requests):
+            return "ignored", ""
         page.wait_for_timeout(50)
     return "unknown", ""
 
 
 def run(url: str, open_at: float, offset: Offset, labels: list[str], keywords: list[str],
-        reload_after: float, give_up_after: float,
+        reload_after: float, give_up_after: float, early: bool = False,
         log: Callable[[str], None] = print, stop: threading.Event | None = None) -> None:
     stop = stop or threading.Event()
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    log_path, write = _open_log_file(offset)
+    show = log
+
+    def log(msg: str) -> None:
+        write(msg)
+        show(msg)
+
+    log(f"기록 파일: {log_path}")
+    log(f"  기준 서버 {offset.host} · 오프셋 {offset.seconds * 1000:+.0f} ms, "
+        f"오차 ±{offset.error * 1000:.0f} ms, 왕복 {offset.rtt * 1000:.0f} ms")
+    # 미리 누르기: 요청이 서버에 닿는 시간만큼 일찍 눌러 정각에 도착하게 한다.
+    lead = offset.lead() if early else 0.0
+    if early:
+        log(f"  미리 누르기: {lead * 1000:.0f} ms 일찍 누릅니다")
+    press_at = open_at - lead
     with sync_playwright() as pw:
         ctx = pw.chromium.launch_persistent_context(
             str(PROFILE_DIR), channel="chrome", headless=False, no_viewport=True,
@@ -215,6 +264,9 @@ def run(url: str, open_at: float, offset: Offset, labels: list[str], keywords: l
                 pass
 
         page.on("dialog", on_dialog)
+        # Times of requests the page sends to its servers; tells an ignored click from a slow one.
+        requests: list[float] = []
+        ctx.on("request", lambda req: requests.append(time.time()) if _counts_as_request(req) else None)
 
         btn = _find_button(page, labels, keywords)
         first_state = _state(btn) if btn is not None else None
@@ -223,7 +275,7 @@ def run(url: str, open_at: float, offset: Offset, labels: list[str], keywords: l
         elif first_state == "ready":
             # 재오픈(N차) 공연 등: 버튼이 이미 열려 있으면 정각에 누른다.
             log("  버튼이 이미 활성 상태입니다. 오픈 시각 정각에 누릅니다.")
-            _wait_until(offset, open_at, "오픈", log, stop)
+            _wait_until(offset, press_at, "오픈", log, stop)
         elif first_state == "pending":
             log("  '오픈 예정' 표시가 있습니다. 표시가 사라지거나 정각이 되면 누릅니다.")
         else:
@@ -243,7 +295,7 @@ def run(url: str, open_at: float, offset: Offset, labels: list[str], keywords: l
             if btn is None:
                 btn = _find_button(page, labels, keywords)
             state = _state(btn) if btn is not None else "disabled"
-            if state == "ready" or (state == "pending" and now >= open_at):
+            if state == "ready" or (state == "pending" and now >= press_at):
                 pages_before, url_before = len(page.context.pages), page.url
                 popups_before = len(_not_open_popups(page))
                 try:
@@ -253,12 +305,16 @@ def run(url: str, open_at: float, offset: Offset, labels: list[str], keywords: l
                     time.sleep(0.01)
                     continue
                 tries += 1
-                late = offset.server_now() - open_at
-                log(f"  클릭 {tries}회째 (오픈 기준 {late * 1000:+.0f} ms)")
-                result, detail = _after_click(page, pages_before, url_before, dialogs, popups_before)
+                clicked_at = offset.server_now()
+                log(f"  클릭 {tries}회째 (오픈 기준 {(clicked_at - open_at) * 1000:+.0f} ms)")
+                result, detail = _after_click(page, pages_before, url_before, dialogs, popups_before, requests)
                 if result == "not_open":
                     log(f"  '오픈 전' 응답 → 닫고 다시 누릅니다 ({detail})")
                     time.sleep(0.15)
+                    continue
+                if result == "ignored":
+                    # 페이지가 서버에 아무것도 보내지 않았다 = 사이트가 아직 안 열렸다고 보고 버튼을 무시했다.
+                    log("  사이트가 클릭을 무시함 (요청 없음) → 다시 누릅니다")
                     continue
                 if result == "blocked":
                     blocked = detail

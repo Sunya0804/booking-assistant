@@ -6,12 +6,26 @@ which pins the server's clock to within roughly half a round trip.
 """
 from __future__ import annotations
 
+import threading
 import time
 import urllib.request
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
+from urllib.parse import urlsplit
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) booking_assistant/0.1"
+
+# Servers whose clock we can read. All of them agree to within measurement noise;
+# what differs is precision: the booking servers answer in ~30 ms, while
+# tickets.interpark.com is a CDN redirect at ~160 ms, so its estimate is ~4x looser.
+TIME_URLS = [
+    "https://poticket.interpark.com/",
+    "https://ticket.interpark.com/",
+    "https://tickets.interpark.com/",
+]
+
+# Never press more than this much ahead of the opening, however slow the network looks.
+MAX_LEAD = 0.15
 
 
 @dataclass
@@ -19,9 +33,23 @@ class Offset:
     seconds: float      # server_time - local_time
     error: float        # +/- uncertainty in seconds
     rtt: float          # median round-trip time in seconds
+    url: str = ""       # server the offset was measured against
 
     def server_now(self) -> float:
         return time.time() + self.seconds
+
+    @property
+    def host(self) -> str:
+        return urlsplit(self.url).hostname or self.url
+
+    def lead(self) -> float:
+        """How early to press so the request reaches the server at the opening.
+
+        One-way trip is about half the round trip; we take the measurement error off
+        that, because arriving early costs a "not open yet" round and arriving late
+        only costs the difference.
+        """
+        return min(max(self.rtt / 2 - self.error, 0.0), MAX_LEAD)
 
 
 def _probe(url: str, timeout: float) -> tuple[float, float, int]:
@@ -59,6 +87,7 @@ def measure(url: str, max_seconds: float = 4.0, interval: float = 0.03, timeout:
                 seconds=cur[2] - tick_local,
                 error=max((hi_mid - lo_mid) / 2, 0.001) if hi - lo > 0 else 0.5,
                 rtt=rtts[len(rtts) // 2],
+                url=url,
             )
         prev = cur
     raise RuntimeError("server second did not roll over in time; try again")
@@ -72,6 +101,37 @@ def measure_best(url: str, rounds: int = 3) -> Offset:
             results.append(measure(url))
         except Exception as exc:  # network blips shouldn't kill the whole sync
             print(f"  [time] probe failed: {exc}")
+    if not results:
+        raise RuntimeError("could not measure server time")
+    return min(results, key=lambda o: o.error)
+
+
+def time_urls(page_url: str = "") -> list[str]:
+    """Booking servers plus the event page's own server."""
+    urls = list(TIME_URLS)
+    parts = urlsplit(page_url.strip())
+    if parts.scheme in ("http", "https") and parts.hostname:
+        origin = f"{parts.scheme}://{parts.netloc}/"
+        if origin not in urls:
+            urls.insert(0, origin)
+    return urls
+
+
+def measure_servers(urls: list[str], rounds: int = 2) -> Offset:
+    """Measure every server at once and keep the most precise estimate."""
+    results: list[Offset] = []
+
+    def work(url: str) -> None:
+        try:
+            results.append(measure_best(url, rounds))
+        except Exception:  # an unreachable server just drops out
+            pass
+
+    threads = [threading.Thread(target=work, args=(u,), daemon=True) for u in urls]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
     if not results:
         raise RuntimeError("could not measure server time")
     return min(results, key=lambda o: o.error)

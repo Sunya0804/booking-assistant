@@ -1,0 +1,29 @@
+<?xml version="1.0" ?>
+<resources>
+    <style name="Theme.BookingAssistant" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorOnPrimary">@color/background</item>
+        <item name="colorPrimaryContainer">@color/container</item>
+        <item name="colorOnPrimaryContainer">@color/accent</item>
+        <item name="colorSecondaryContainer">@color/container</item>
+        <item name="colorOnSecondaryContainer">@color/accent</item>
+        <item name="colorSurface">@color/surface</item>
+        <item name="colorOnSurface">@color/foreground</item>
+        <item name="colorOnSurfaceVariant">@color/muted</item>
+        <item name="colorOutline">@color/outline</item>
+        <item name="colorError">@color/danger</item>
+        <item name="android:colorBackground">@color/background</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="colorSecondary">@color/accent</item>
+        <item name="colorTertiary">@color/accent</item>
+        <item name="colorSurfaceVariant">@color/background</item>
+        <item name="colorSurfaceContainer">@color/surface</item>
+        <item name="colorSurfaceContainerLow">@color/surface</item>
+        <item name="colorSurfaceContainerHigh">@color/surface</item>
+        <item name="colorSurfaceContainerHighest">@color/background</item>
+        <item name="colorSurfaceContainerLowest">@color/surface</item>
+        <item name="colorOutlineVariant">@color/outline</item>
+    </style>
+</resources>

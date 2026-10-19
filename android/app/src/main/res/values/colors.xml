@@ -1,0 +1,12 @@
+<?xml version="1.0" ?>
+<resources>
+    <color name="background">#F4F6F6</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="foreground">#182625</color>
+    <color name="muted">#586B68</color>
+    <color name="accent">#0F766E</color>
+    <color name="container">#DDF2EE</color>
+    <color name="danger">#B42335</color>
+    <color name="outline">#B5C8C4</color>
+    <color name="icon_background">#0F766E</color>
+</resources>

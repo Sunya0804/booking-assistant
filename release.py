@@ -31,6 +31,8 @@ def sh(*cmd: str, cwd: Path = ROOT) -> None:
 def build_exe() -> Path:
     sh(sys.executable, "-m", "PyInstaller", "--noconfirm", "--onefile", "--windowed",
        "--collect-data", "sv_ttk", "--name", NAME,
+       "--icon", str(ROOT / "assets" / "app.ico"),
+       "--add-data", f"{ROOT / 'assets'};assets",
        "--distpath", str(DIST), "--workpath", "build", "--specpath", "build", "gui.py")
     return DIST / f"{NAME}.exe"
 

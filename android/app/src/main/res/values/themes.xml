@@ -1,29 +1,154 @@
 <?xml version="1.0" ?>
 <resources>
-    <style name="Theme.BookingAssistant" parent="Theme.Material3.DayNight.NoActionBar">
-        <item name="colorPrimary">@color/accent</item>
-        <item name="colorOnPrimary">@color/surface</item>
-        <item name="colorPrimaryContainer">@color/container</item>
-        <item name="colorOnPrimaryContainer">@color/accent</item>
-        <item name="colorSecondaryContainer">@color/container</item>
-        <item name="colorOnSecondaryContainer">@color/accent</item>
-        <item name="colorSurface">@color/surface</item>
-        <item name="colorOnSurface">@color/foreground</item>
-        <item name="colorOnSurfaceVariant">@color/muted</item>
-        <item name="colorOutline">@color/outline</item>
-        <item name="colorError">@color/danger</item>
-        <item name="android:colorBackground">@color/background</item>
-        <item name="android:fontFamily">sans</item>
+    <!--
+      Five themes with the same colors as the PC version (ui/app.css). Each screen calls
+      setTheme(appTheme()) before super.onCreate; Material widgets (switch, slider, pickers,
+      dialogs) take their colors from here, the code-built views from Palette.
+    -->
+    <style name="Theme.Booking.Base" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:fontFamily">@font/pretendard</item>
+        <item name="fontFamily">@font/pretendard</item>
+        <item name="colorSecondary">?attr/colorPrimary</item>
+        <item name="colorTertiary">?attr/colorPrimary</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.Booking.Dialog</item>
+        <item name="elevationOverlayEnabled">false</item>
+    </style>
+
+    <style name="ThemeOverlay.Booking.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="shapeAppearanceOverlay">@style/Shape.Booking.Dialog</item>
+        <item name="backgroundTint">?attr/colorSurface</item>
+    </style>
+
+    <style name="Shape.Booking.Dialog" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">20dp</item>
+    </style>
+
+    <style name="Theme.Booking.Light" parent="Theme.Booking.Base">
+        <item name="isLightTheme">true</item>
+        <item name="android:colorBackground">#F2F4F6</item>
+        <item name="colorPrimary">#2B5CE6</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#E3EAFC</item>
+        <item name="colorOnPrimaryContainer">#2B5CE6</item>
+        <item name="colorSecondaryContainer">#E3EAFC</item>
+        <item name="colorOnSecondaryContainer">#2B5CE6</item>
+        <item name="colorSurface">#FFFFFF</item>
+        <item name="colorOnSurface">#191F28</item>
+        <item name="colorOnSurfaceVariant">#5B6573</item>
+        <item name="colorSurfaceVariant">#F2F4F6</item>
+        <item name="colorSurfaceContainerLowest">#FFFFFF</item>
+        <item name="colorSurfaceContainerLow">#FFFFFF</item>
+        <item name="colorSurfaceContainer">#FFFFFF</item>
+        <item name="colorSurfaceContainerHigh">#FFFFFF</item>
+        <item name="colorSurfaceContainerHighest">#F2F4F6</item>
+        <item name="colorOutline">#C5CCD5</item>
+        <item name="colorOutlineVariant">#E5E8EB</item>
+        <item name="colorError">#D92D20</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowLightNavigationBar">true</item>
-        <item name="colorSecondary">@color/accent</item>
-        <item name="colorTertiary">@color/accent</item>
-        <item name="colorSurfaceVariant">@color/background</item>
-        <item name="colorSurfaceContainer">@color/surface</item>
-        <item name="colorSurfaceContainerLow">@color/surface</item>
-        <item name="colorSurfaceContainerHigh">@color/surface</item>
-        <item name="colorSurfaceContainerHighest">@color/background</item>
-        <item name="colorSurfaceContainerLowest">@color/surface</item>
-        <item name="colorOutlineVariant">@color/outline</item>
     </style>
+
+    <style name="Theme.Booking.Dark" parent="Theme.Booking.Base">
+        <item name="isLightTheme">false</item>
+        <item name="android:colorBackground">#0E1116</item>
+        <item name="colorPrimary">#4C7DFF</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#1C2847</item>
+        <item name="colorOnPrimaryContainer">#8FB0FF</item>
+        <item name="colorSecondaryContainer">#1C2847</item>
+        <item name="colorOnSecondaryContainer">#8FB0FF</item>
+        <item name="colorSurface">#171B22</item>
+        <item name="colorOnSurface">#ECEFF3</item>
+        <item name="colorOnSurfaceVariant">#9AA4B2</item>
+        <item name="colorSurfaceVariant">#1F242D</item>
+        <item name="colorSurfaceContainerLowest">#0E1116</item>
+        <item name="colorSurfaceContainerLow">#171B22</item>
+        <item name="colorSurfaceContainer">#171B22</item>
+        <item name="colorSurfaceContainerHigh">#1F242D</item>
+        <item name="colorSurfaceContainerHighest">#1F242D</item>
+        <item name="colorOutline">#3A414D</item>
+        <item name="colorOutlineVariant">#262C36</item>
+        <item name="colorError">#FF8A8A</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+
+    <style name="Theme.Booking.Sand" parent="Theme.Booking.Base">
+        <item name="isLightTheme">true</item>
+        <item name="android:colorBackground">#F4EFE6</item>
+        <item name="colorPrimary">#C2410C</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#F8E3D6</item>
+        <item name="colorOnPrimaryContainer">#C2410C</item>
+        <item name="colorSecondaryContainer">#F8E3D6</item>
+        <item name="colorOnSecondaryContainer">#C2410C</item>
+        <item name="colorSurface">#FFFCF7</item>
+        <item name="colorOnSurface">#2B241D</item>
+        <item name="colorOnSurfaceVariant">#6F6254</item>
+        <item name="colorSurfaceVariant">#F1EBE1</item>
+        <item name="colorSurfaceContainerLowest">#FFFCF7</item>
+        <item name="colorSurfaceContainerLow">#FFFCF7</item>
+        <item name="colorSurfaceContainer">#FFFCF7</item>
+        <item name="colorSurfaceContainerHigh">#FFFCF7</item>
+        <item name="colorSurfaceContainerHighest">#F1EBE1</item>
+        <item name="colorOutline">#D6CBBB</item>
+        <item name="colorOutlineVariant">#E9E1D4</item>
+        <item name="colorError">#B42318</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+
+    <style name="Theme.Booking.Midnight" parent="Theme.Booking.Base">
+        <item name="isLightTheme">false</item>
+        <item name="android:colorBackground">#0B1020</item>
+        <item name="colorPrimary">#6F5EF0</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#231F48</item>
+        <item name="colorOnPrimaryContainer">#B3A9FF</item>
+        <item name="colorSecondaryContainer">#231F48</item>
+        <item name="colorOnSecondaryContainer">#B3A9FF</item>
+        <item name="colorSurface">#141B2E</item>
+        <item name="colorOnSurface">#E7EBF6</item>
+        <item name="colorOnSurfaceVariant">#9AA4BE</item>
+        <item name="colorSurfaceVariant">#1B2338</item>
+        <item name="colorSurfaceContainerLowest">#0B1020</item>
+        <item name="colorSurfaceContainerLow">#141B2E</item>
+        <item name="colorSurfaceContainer">#141B2E</item>
+        <item name="colorSurfaceContainerHigh">#1B2338</item>
+        <item name="colorSurfaceContainerHighest">#1B2338</item>
+        <item name="colorOutline">#36405C</item>
+        <item name="colorOutlineVariant">#232C44</item>
+        <item name="colorError">#FF8FA3</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+
+    <style name="Theme.Booking.Mono" parent="Theme.Booking.Base">
+        <item name="isLightTheme">true</item>
+        <item name="android:colorBackground">#FAFAFA</item>
+        <item name="colorPrimary">#18181B</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#F4F4F5</item>
+        <item name="colorOnPrimaryContainer">#18181B</item>
+        <item name="colorSecondaryContainer">#F4F4F5</item>
+        <item name="colorOnSecondaryContainer">#18181B</item>
+        <item name="colorSurface">#FFFFFF</item>
+        <item name="colorOnSurface">#09090B</item>
+        <item name="colorOnSurfaceVariant">#5F5F67</item>
+        <item name="colorSurfaceVariant">#F4F4F5</item>
+        <item name="colorSurfaceContainerLowest">#FFFFFF</item>
+        <item name="colorSurfaceContainerLow">#FFFFFF</item>
+        <item name="colorSurfaceContainer">#FFFFFF</item>
+        <item name="colorSurfaceContainerHigh">#FFFFFF</item>
+        <item name="colorSurfaceContainerHighest">#F4F4F5</item>
+        <item name="colorOutline">#D4D4D8</item>
+        <item name="colorOutlineVariant">#E4E4E7</item>
+        <item name="colorError">#DC2626</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+
+    <!-- Manifest default, shown until a screen applies the chosen theme. -->
+    <style name="Theme.BookingAssistant" parent="Theme.Booking.Light" />
 </resources>

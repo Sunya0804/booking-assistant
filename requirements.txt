@@ -1,2 +1,2 @@
 playwright>=1.40
-sv-ttk>=2.6
+pywebview>=5.0

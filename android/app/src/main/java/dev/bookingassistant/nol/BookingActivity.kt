@@ -69,6 +69,7 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
     private lateinit var web: WebView
     private lateinit var webFrame: FrameLayout
     private lateinit var clock: TextView
+    private lateinit var clockSub: TextView
     private lateinit var chip: TextView
     private lateinit var lastLine: TextView
     private lateinit var logView: TextView
@@ -90,12 +91,11 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
     private val stampFormat = DateTimeFormatter.ofPattern("HH:mm:ss.SSS").withZone(KST)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        palette = applyTheme()
         super.onCreate(savedInstanceState)
-        palette = Palette(isNight())
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         actionBar?.hide()
         setContentView(build())
-        window.decorView.post { updateSystemBarAppearance() }
         if (Build.VERSION.SDK_INT >= 33) {
             onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT) { goBack() }
         }
@@ -120,8 +120,6 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
         } else {
             showStatus("idle")
             actionBtn.text = "이 주소로 설정"
-            actionBtn.backgroundTintList = ColorStateList.valueOf(palette.status.getValue("busy").first)
-            actionBtn.setTextColor(palette.accent)
             actionBtn.setOnClickListener { pickCurrentUrl() }
             log("공연 페이지로 가서 '이 주소로 설정'을 누르면 주소 칸에 들어갑니다. 로그인도 여기서 해 두면 유지됩니다.")
             launch { offset = runCatching { withContext(Dispatchers.IO) { measureServers(timeUrls(url)) } }.getOrNull() }
@@ -167,8 +165,9 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
             if (off != null) {
                 val now = off.serverNow()
                 val left = openAt?.let { it - now }
-                clock.text = fmt.format(Instant.ofEpochMilli((now * 1000).toLong())) +
-                    if (left != null && left > 0) "\n오픈까지 %d:%02d".format(left.toInt() / 60, left.toInt() % 60) else ""
+                clock.text = fmt.format(Instant.ofEpochMilli((now * 1000).toLong()))
+                clockSub.text = if (left != null && left > 0) "서버 시각 · 오픈까지 %d:%02d".format(left.toInt() / 60, left.toInt() % 60)
+                else "서버 시각 · " + off.host
             }
             delay(50)
         }
@@ -204,90 +203,74 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
     // ---- UI ----
 
     private fun build(): View {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(palette.bg)
-        }
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         bar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(palette.surface)
-            setPadding(dp(12), dp(4), dp(12), dp(4))
+            setPadding(dp(16), dp(10), dp(12), dp(6))
         }
         val top = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        clock = TextView(this).apply {
-            text = "--:--:--.---"
-            textSize = 13f
-            fontFeatureSettings = "tnum"
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            setTextColor(palette.logFg)
-            maxLines = 2
-        }
-        chip = TextView(this).apply { textSize = 12f }
+        val clocks = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        clock = text("--:--:--.---", palette, 18f, palette.text, 700).apply { fontFeatureSettings = "tnum" }
+        clocks.add(clock)
+        clockSub = text("서버 시각", palette, 12f, palette.muted).apply { fontFeatureSettings = "tnum" }
+        clocks.add(clockSub, top = 4)
+        top.addView(clocks, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        chip = TextView(this)
+        top.addView(chip, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginEnd = dp(8) })
         actionBtn = action("중지", palette, "danger").apply {
-            textSize = 12f
+            textSize = 14f
             minWidth = dp(64)
             minimumWidth = dp(64)
-            insetTop = 0
-            insetBottom = 0
-            setPadding(dp(12), 0, dp(12), 0)
+            cornerRadius = dp(12)
+            setPadding(dp(14), 0, dp(14), 0)
             setOnClickListener { stop() }
         }
-        top.addView(clock, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-        top.addView(chip, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginEnd = dp(8) })
-        top.addView(actionBtn, LinearLayout.LayoutParams(WRAP_CONTENT, dp(48)))
+        top.addView(actionBtn, LinearLayout.LayoutParams(WRAP_CONTENT, dp(42)))
         bar.addView(top)
 
         val logRow = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = dp(32)
+            minimumHeight = dp(36)
             isClickable = true
             isFocusable = true
             contentDescription = "진행 기록 펼치기"
             setOnClickListener { toggleLog() }
         }
-        lastLine = TextView(this).apply {
-            textSize = 12f
+        lastLine = text("", palette, 12.5f, palette.muted).apply {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
-            setTextColor(palette.muted)
         }
         logRow.addView(lastLine, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
         disclosure = ImageButton(this).apply {
             setImageResource(R.drawable.ic_expand)
-            imageTintList = ColorStateList.valueOf(palette.muted)
             setBackgroundColor(android.graphics.Color.TRANSPARENT)
             contentDescription = "진행 기록 펼치기"
             setOnClickListener { toggleLog() }
         }
         shareBtn = action("기록 공유", palette, "text").apply {
-            textSize = 12f
+            textSize = 12.5f
             minimumHeight = 0
             minHeight = 0
-            insetTop = 0
-            insetBottom = 0
             visibility = View.GONE
             setOnClickListener { shareLog() }
         }
         logRow.addView(shareBtn, LinearLayout.LayoutParams(WRAP_CONTENT, dp(32)))
-        logRow.addView(disclosure, LinearLayout.LayoutParams(dp(48), dp(32)))
+        logRow.addView(disclosure, LinearLayout.LayoutParams(dp(44), dp(36)))
         bar.addView(logRow)
-        logView = TextView(this).apply {
-            textSize = 13f
+        logView = text("", palette, 13f, palette.text).apply {
             setLineSpacing(dp(4).toFloat(), 1f)
-            setTextColor(palette.logFg)
             setPadding(dp(12), dp(12), dp(12), dp(12))
             setTextIsSelectable(true)
         }
         logScroll = ScrollView(this).apply {
-            background = surface(palette.bg, 12)
             visibility = View.GONE
             addView(logView)
         }
-        bar.addView(logScroll, LinearLayout.LayoutParams(MATCH_PARENT, minOf(dp(200), (resources.displayMetrics.heightPixels * 0.25).toInt())))
+        bar.addView(logScroll, LinearLayout.LayoutParams(MATCH_PARENT, minOf(dp(200), (resources.displayMetrics.heightPixels * 0.25).toInt())).apply {
+            bottomMargin = dp(6)
+        })
         root.addView(bar)
-        banner = TextView(this).apply {
-            textSize = 14f
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        banner = text("", palette, 14f, palette.text, 600).apply {
             setPadding(dp(16), dp(12), dp(16), dp(12))
             visibility = View.GONE
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_ASSERTIVE
@@ -299,7 +282,32 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
         webFrame.addView(web, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         root.addView(webFrame, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
         root.padForSystemBars()
+        paint(root)
         return root
+    }
+
+    /** Theme colors for the bar; again when the phone switches light/dark (theme not chosen). */
+    private fun paint(root: View = bar.parent as View) {
+        root.setBackgroundColor(palette.surface)
+        bar.setBackgroundColor(palette.surface)
+        clock.setTextColor(palette.text)
+        clockSub.setTextColor(palette.muted)
+        lastLine.setTextColor(palette.muted)
+        logView.setTextColor(palette.text)
+        logScroll.background = rounded(palette.tile, 12)
+        disclosure.imageTintList = ColorStateList.valueOf(palette.muted)
+        shareBtn.setTextColor(palette.accent)
+        chip.chip(palette, statusKey)
+        val (bg, fg) = if (intent.hasExtra(EXTRA_OPEN_AT)) palette.dangerBg to palette.danger else palette.accentSoft to palette.accent
+        val states = arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf())
+        actionBtn.backgroundTintList = ColorStateList(states, intArrayOf(palette.chip, bg))
+        actionBtn.setTextColor(ColorStateList(states, intArrayOf(palette.faint, fg)))
+        if (statusKey == "done" || statusKey == "fail") {
+            val (bannerBg, bannerFg) = palette.status(statusKey)
+            banner.setBackgroundColor(bannerBg)
+            banner.setTextColor(bannerFg)
+        }
+        paintSystemBars(palette)
     }
 
     private fun showStatus(key: String) {
@@ -307,7 +315,7 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
         chip.chip(palette, key)
         if ((key == "done" || key == "fail") && !bannerShown) {
             bannerShown = true
-            val (bg, fg) = palette.status.getValue(key)
+            val (bg, fg) = palette.status(key)
             banner.setBackgroundColor(bg)
             banner.setTextColor(fg)
             banner.text = if (key == "done") "✓  클릭 완료 · 대기열 / 좌석 / 결제는 직접 진행하세요" else "!  확인 필요 · 기록과 예매 화면을 확인하세요"
@@ -318,31 +326,11 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        palette = Palette(isNight())
-        updateSystemBarAppearance()
-        bar.setBackgroundColor(palette.surface)
-        (bar.parent as View).setBackgroundColor(palette.bg)
-        clock.setTextColor(palette.logFg)
-        lastLine.setTextColor(palette.muted)
-        logView.setTextColor(palette.logFg)
-        logScroll.background = surface(palette.bg, 12)
-        disclosure.imageTintList = ColorStateList.valueOf(palette.muted)
-        chip.chip(palette, statusKey)
-        val (bg, fg) = palette.status.getValue(if (openAt == null) "busy" else "fail")
-        val states = arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf())
-        actionBtn.backgroundTintList = ColorStateList(states, intArrayOf(palette.status.getValue("idle").first, bg))
-        actionBtn.setTextColor(ColorStateList(states, intArrayOf(palette.muted, fg)))
-        if (statusKey == "done" || statusKey == "fail") {
-            val colors = palette.status.getValue(statusKey)
-            banner.setBackgroundColor(colors.first)
-            banner.setTextColor(colors.second)
+        val name = themeName()
+        if (name != palette.name) {
+            palette = Palette(name)
+            paint()
         }
-    }
-
-    private fun updateSystemBarAppearance() {
-        val light = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
-            android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
-        window.insetsController?.setSystemBarsAppearance(if (isNight()) 0 else light, light)
     }
 
     private fun toggleLog() {

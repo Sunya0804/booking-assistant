@@ -166,16 +166,16 @@ class AlarmService : Service() {
 /** Shown over the lock screen while the alarm rings. */
 class AlarmActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        val palette = applyTheme()
         super.onCreate(savedInstanceState)
         setShowWhenLocked(true)
         setTurnScreenOn(true)
-        val palette = Palette(isNight())
         val openAt = intent.getDoubleExtra(OpenAlarm.EXTRA_OPEN_AT, 0.0)
         val minutes = intent.getIntExtra(OpenAlarm.EXTRA_MINUTES, 5)
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setPadding(dp(24), dp(24), dp(24), dp(24))
+            setPadding(dp(20), dp(24), dp(20), dp(24))
         }
         // The outer frame takes the system-bar insets; the column keeps its own margins.
         val root = android.widget.FrameLayout(this).apply {
@@ -183,33 +183,38 @@ class AlarmActivity : AppCompatActivity() {
             addView(col, android.widget.FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             padForSystemBars()
         }
-        col.addView(TextView(this).apply {
-            text = "예매 ${minutes}분 전"
-            textSize = 34f
-            setTextColor(palette.accent)
+        val card = card(palette, 28).apply { gravity = Gravity.CENTER_HORIZONTAL }
+        card.add(android.widget.ImageView(this).apply {
+            setImageResource(R.drawable.ic_mark)
+            imageTintList = android.content.res.ColorStateList.valueOf(palette.onAccent)
+            background = rounded(palette.accent, 16)
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }, width = dp(56), height = dp(56))
+        card.add(TextView(this).apply { chip(palette, "busy", "오픈 ${minutes}분 전") }, top = 20, width = WRAP_CONTENT)
+        card.add(text("예매 ${minutes}분 전", palette, 32f, palette.text, 700).apply { gravity = Gravity.CENTER }, top = 14)
+        card.add(text(AlarmService.openText(openAt), palette, 16f, palette.label, 600).apply { gravity = Gravity.CENTER }, top = 10)
+        card.add(text("앱을 열어 로그인과 날짜/회차를 확인하고 시작하세요.", palette, 14f, palette.muted).apply {
             gravity = Gravity.CENTER
-        })
-        col.addView(TextView(this).apply {
-            text = AlarmService.openText(openAt) + "\n앱을 열어 로그인과 날짜/회차를 확인하고 시작하세요."
+            setLineSpacing(dp(3).toFloat(), 1f)
+        }, top = 8)
+        card.add(action("앱 열기", palette).apply {
             textSize = 16f
-            setTextColor(palette.muted)
-            gravity = Gravity.CENTER
-            setPadding(0, dp(12), 0, dp(32))
-        })
-        col.addView(action("앱 열기", palette).apply {
             setOnClickListener {
                 AlarmService.stop(this@AlarmActivity)
                 startActivity(Intent(this@AlarmActivity, SetupActivity::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
                 finish()
             }
-        }, LinearLayout.LayoutParams(MATCH_PARENT, dp(56)))
-        col.addView(action("알람 끄기", palette, "outlined").apply {
+        }, top = 28, height = dp(56))
+        card.add(action("알람 끄기", palette, "secondary").apply {
             setOnClickListener {
                 AlarmService.stop(this@AlarmActivity)
                 finish()
             }
-        }, LinearLayout.LayoutParams(MATCH_PARENT, dp(56)).apply { topMargin = dp(8) })
+        }, top = 8, height = dp(52))
+        col.add(card)
         setContentView(root)
+        paintSystemBars(palette)
     }
 }

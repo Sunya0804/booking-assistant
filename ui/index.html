@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="ko" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NOL 예매 도우미</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="mark" aria-hidden="true">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4z"/><path d="M12 9v3l2 1"/></svg>
+    </div>
+    <div class="app-name">예매 도우미</div>
+    <span class="site" id="site">NOL</span>
+    <div class="menu-anchor">
+      <button class="icon-btn" id="themeBtn" aria-label="테마 고르기" aria-haspopup="true" aria-expanded="false">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13.5" cy="6.5" r="1.5"/><circle cx="17.5" cy="10.5" r="1.5"/><circle cx="8.5" cy="7.5" r="1.5"/><circle cx="6.5" cy="12.5" r="1.5"/><path d="M12 2a10 10 0 0 0 0 20c1.1 0 2-.9 2-2 0-.5-.2-1-.5-1.3-.3-.4-.5-.8-.5-1.3 0-1.1.9-2 2-2h2.3c3 0 5.5-2.5 5.5-5.5C22.8 5.8 18 2 12 2z"/></svg>
+      </button>
+      <div class="menu" id="themeMenu" role="menu" hidden></div>
+    </div>
+  </header>
+
+  <!-- hero: countdown (idle/running) or result (done) -->
+  <section class="card hero">
+    <div class="row">
+      <span class="eyebrow" id="eyebrow">오픈까지</span>
+      <span class="chip" id="chip"><span class="dot"></span><span id="chipText">대기</span></span>
+    </div>
+    <div id="clockBlock">
+      <div class="countdown num" id="countdown">--:--</div>
+      <div class="target" id="target">오픈 날짜와 시각을 넣어 주세요</div>
+      <div class="tiles">
+        <div class="tile">
+          <span class="k"><span id="serverLabel">서버 시각</span><button class="link" id="remeasure">다시 측정</button></span>
+          <span class="v num" id="serverClock">--:--:--.---</span>
+          <span class="s" id="drift">서버 시각 측정 중…</span>
+        </div>
+        <div class="tile">
+          <span class="k">연결</span>
+          <span class="v"><span class="speed" id="speedDot"></span><span class="num" id="rtt">—</span></span>
+          <span class="s" id="host">—</span>
+        </div>
+      </div>
+    </div>
+    <div id="resultBlock" hidden>
+      <div class="result-title" id="resultTitle">예매창을 열었어요</div>
+      <div class="result-sub" id="resultSub">이제 Chrome에서 대기열 · 좌석 · 결제를 직접 진행하세요.</div>
+      <div class="tiles three">
+        <div class="tile"><span class="k">누른 시각</span><span class="v num" id="rLate">—</span></div>
+        <div class="tile"><span class="k">시도</span><span class="v num" id="rTries">—</span></div>
+        <div class="tile"><span class="k">오차</span><span class="v num" id="rError">—</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- idle: the form -->
+  <section class="card form" id="formCard">
+    <div class="field">
+      <label for="url">공연 페이지 주소</label>
+      <input id="url" spellcheck="false" placeholder="https://nol.yanolja.com/ticket/products/…">
+    </div>
+    <div class="grid2">
+      <div class="field">
+        <label for="date">오픈 날짜</label>
+        <input id="date" class="num" placeholder="20261024">
+      </div>
+      <div class="field">
+        <label for="time">오픈 시각</label>
+        <input id="time" class="num" placeholder="200000">
+      </div>
+    </div>
+    <div class="field">
+      <label for="keywords">경기 / 회차 키워드</label>
+      <input id="keywords" spellcheck="false">
+      <span class="help" id="keywordHelp">버튼이 여러 개일 때 카드의 글자 (예: 3차전)</span>
+    </div>
+    <div class="toggle-row">
+      <div class="t"><b>미리 누르기</b><span>요청이 서버에 닿는 시간만큼 일찍 눌러요 (최대 150 ms)</span></div>
+      <button class="switch" id="early" role="switch" aria-checked="false" aria-label="미리 누르기"></button>
+    </div>
+    <button class="disclosure" id="advBtn" aria-expanded="false" aria-controls="adv">고급 설정
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+    <div class="grid2" id="adv" hidden>
+      <div class="field">
+        <label for="labels">예매 버튼 문구</label>
+        <input id="labels" spellcheck="false">
+        <span class="help">쉼표로 구분</span>
+      </div>
+      <div class="field">
+        <label for="reload">새로고침 간격 (초)</label>
+        <input id="reload" class="num">
+        <span class="help">버튼이 안 열릴 때</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- running: what is being watched -->
+  <section class="card summary" id="summaryCard" hidden>
+    <div class="line"><span>공연</span><span id="sumUrl"></span></div>
+    <div class="line"><span>회차</span><span id="sumKeywords"></span></div>
+    <div class="line"><span>옵션</span><span id="sumOptions"></span></div>
+  </section>
+
+  <button class="primary" id="startBtn">시작 · Chrome 열기</button>
+  <button class="danger" id="stopBtn" hidden>중지</button>
+  <button class="secondary" id="resetBtn" hidden>처음으로</button>
+  <div class="error" id="error" hidden></div>
+  <div class="hint" id="hint">오픈 5분 전에 시작하고, 열린 Chrome에서 로그인과 날짜/회차를 골라 두세요.</div>
+
+  <section class="card log">
+    <button class="log-head" id="logBtn" aria-expanded="false" aria-controls="logBody">진행 기록
+      <span class="count num" id="logCount">0</span>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+    <div class="log-body" id="logBody" hidden></div>
+  </section>
+
+  <footer class="foot">
+    <span class="ver" id="ver">—</span>
+    <button id="logsBtn">기록 폴더</button>
+    <button id="updateBtn">업데이트 확인</button>
+  </footer>
+</div>
+
+<div class="scrim" id="updateDialog" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="updTitle">
+    <h2 id="updTitle">새 버전이 있어요</h2>
+    <p id="updText"></p>
+    <pre id="updNotes" hidden></pre>
+    <div class="actions">
+      <button class="ghost" id="updLater">나중에</button>
+      <button class="go" id="updGo">설치하고 다시 시작</button>
+    </div>
+  </div>
+</div>
+
+<script>window.__errors=[];window.addEventListener("error",e=>window.__errors.push(String(e.message)+" @"+e.lineno));</script>
+<script src="app.js"></script>
+</body>
+</html>

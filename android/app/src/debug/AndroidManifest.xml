@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: lets `adb shell am start` open the booking screen directly for testing. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- The local test page is plain http. -->
+    <application android:usesCleartextTraffic="true">
+        <activity
+            android:name=".BookingActivity"
+            android:exported="true"
+            tools:replace="android:exported" />
+    </application>
+</manifest>

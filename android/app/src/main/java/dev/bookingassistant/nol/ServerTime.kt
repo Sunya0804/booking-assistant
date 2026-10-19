@@ -117,7 +117,8 @@ fun timeUrls(pageUrl: String = ""): List<String> {
         val u = URL(pageUrl.trim())
         if (u.protocol in listOf("http", "https") && u.host.isNotEmpty()) "${u.protocol}://${u.authority}/" else null
     }.getOrNull()
-    return if (origin == null || origin in TIME_URLS) TIME_URLS else listOf(origin) + TIME_URLS
+    val siteUrls = siteFor(pageUrl).timeUrls
+    return if (origin == null || origin in siteUrls) siteUrls else listOf(origin) + siteUrls
 }
 
 /** Measure every server at once and keep the most precise estimate. Blocking: call off the main thread. */

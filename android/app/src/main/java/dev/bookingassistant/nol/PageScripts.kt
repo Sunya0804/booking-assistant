@@ -23,7 +23,8 @@ private const val LIBRARY = """
   // Replies a site gives when a booking button is pressed before the opening.
   const NOT_OPEN = /오픈\s*전|오픈되지|오픈\s*예정|아직.{0,10}(오픈|예매|판매)|(예매|판매)\s*(가능\s*)?(시간|기간)이\s*아닙|준비\s*중/;
   const POPUPS = '[role=dialog], [role=alertdialog], [class*=modal], [class*=Modal], ' +
-                 '[class*=toast], [class*=Toast], [class*=alert], [class*=popup], [class*=Popup]';
+                 '[class*=toast], [class*=Toast], [class*=alert], [class*=popup], [class*=Popup], ' +
+                 '[class*=alarm_pop]';  // Melon: div.layer_alarm_pop
   const CLICKABLE = 'a, button, [role=button], [role=link], input[type=button], input[type=submit]';
 
   function visible(el) {
@@ -105,6 +106,11 @@ private const val LIBRARY = """
     },
     jsClick() { if (this.btn) this.btn.click(); return !!this.btn; },
     popupCount() { return notOpenPopups().length; },
+    loginPopup() {
+      const LOGIN = /로그인이\s*필요|로그인\s*후\s*(이용|예매)|로그인\s*하시겠|로그인\s*페이지로/;
+      const p = Array.from(document.querySelectorAll(POPUPS)).find(p => visible(p) && LOGIN.test(p.innerText || ''));
+      return p ? (p.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 60) : '';
+    },
     // Close the newest "not open yet" popup; returns its text.
     dismissLast() {
       const list = notOpenPopups();
@@ -179,6 +185,26 @@ class PageScripts(private val webView: WebView) {
     }
 
     suspend fun jsClick(): Boolean = call("jsClick()") == "true"
+
+    /** Evaluate a stand-alone expression (no library) and return its JSON result. */
+    private suspend fun eval(expr: String): String = suspendCancellableCoroutine { cont ->
+        webView.evaluateJavascript(expr) { if (cont.isActive) cont.resume(it ?: "null") }
+    }
+
+    /** "in", "out" or "unknown" from the page's own login link (Melon PC). */
+    suspend fun loginState(): String = eval(LOGIN_DOM_JS).trim('"')
+
+    /** Pick Melon's date/time; see SCHEDULE_JS. */
+    suspend fun schedule(keywords: List<String>): JSONObject? {
+        val raw = eval("$SCHEDULE_JS(${JSONArray(keywords)})")
+        return if (raw.startsWith("{")) JSONObject(raw) else null
+    }
+
+    /** Text of a visible "log in first" modal, or "". */
+    suspend fun loginPopup(): String {
+        val raw = call("loginPopup()")
+        return if (raw.startsWith("\"")) JSONArray("[$raw]").getString(0) else ""
+    }
 
     suspend fun popupCount(): Int = call("popupCount()").toIntOrNull() ?: 0
 

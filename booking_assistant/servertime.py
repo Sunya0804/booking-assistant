@@ -112,8 +112,9 @@ def measure_best(url: str, rounds: int = 3) -> Offset:
 
 
 def time_urls(page_url: str = "") -> list[str]:
-    """Booking servers plus the event page's own server."""
-    urls = list(TIME_URLS)
+    """The site's booking servers plus the event page's own server."""
+    from .sites import site_for
+    urls = list(site_for(page_url).time_urls)
     parts = urlsplit(page_url.strip())
     if parts.scheme in ("http", "https") and parts.hostname:
         origin = f"{parts.scheme}://{parts.netloc}/"

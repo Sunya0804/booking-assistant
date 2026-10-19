@@ -377,7 +377,7 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
 
     private fun cookieNames(): List<String> {
         val cm = CookieManager.getInstance()
-        return listOfNotNull("https://nol.yanolja.com/", "https://tickets.interpark.com/", web.url)
+        return (siteFor(intent.getStringExtra(EXTRA_URL).orEmpty()).cookieUrls + listOfNotNull(web.url))
             .flatMap { url -> cm.getCookie(url).orEmpty().split(';') }
             .map { it.substringBefore('=').trim() }
             .filter { it.isNotEmpty() }

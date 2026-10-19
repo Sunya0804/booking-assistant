@@ -5,6 +5,7 @@ import android.view.InputDevice
 import android.view.MotionEvent
 import android.webkit.WebView
 import kotlinx.coroutines.delay
+import org.json.JSONObject
 
 /**
  * Press the booking button on time inside our own WebView (port of browser.run).
@@ -46,6 +47,9 @@ class Booker(
     enum class Outcome { CLICKED, BLOCKED, MISSED }
 
     private val page = PageScripts(web)
+    private val site = siteFor(config.url)
+    // Melon: one booking button; the keywords pick the date/time instead of a card.
+    private val buttonKeywords = if (site.picksSchedule) emptyList() else config.keywords
     private val dialogs = ArrayDeque<String>()
     private var reloadStartedAt: Double? = null
     private var reloadedAt: Double? = null
@@ -75,11 +79,12 @@ class Booker(
     @Volatile private var traceUntil = 0.0
 
     /** Warn if no login cookie is visible a minute before the opening. */
-    private fun checkLogin() {
+    private suspend fun checkLogin() {
         val names = runCatching { cookieNames() }.getOrDefault(emptyList()).distinct().sorted()
         trace("  쿠키 이름: " + names.joinToString(", ").ifEmpty { "(없음)" })
-        if (names.any { it !in GUEST_COOKIES && LOGIN_COOKIE.containsMatchIn(it) }) {
-            log("  로그인 확인: 로그인 쿠키가 있습니다.")
+        val shown = runCatching { page.loginState() }.getOrDefault("unknown")
+        if (shown == "in" || (shown == "unknown" && names.any { it !in site.guestCookies && LOGIN_COOKIE.containsMatchIn(it) })) {
+            log("  로그인 확인: " + if (shown == "in") "화면에 로그아웃 버튼이 있습니다." else "로그인 쿠키가 있습니다.")
         } else {
             log("  ⚠ 로그인이 안 된 것 같습니다. 화면에서 로그인 상태를 확인하세요.")
             warn()
@@ -140,12 +145,35 @@ class Booker(
      * pressing again is safe. "unknown": a request went out but nothing visible came back.
      */
     private suspend fun afterClick(windowsBefore: Int, urlBefore: String, popupsBefore: Int,
-                                   timeout: Double = 2.0): Pair<String, String> {
+                                   timeout: Double = 2.0, allowPick: Boolean = true): Pair<String, String> {
         val start = localNow()
         val end = start + timeout
+        var lastSheet: String? = null
         while (localNow() < end) {
             dialogs.removeFirstOrNull()?.let { msg ->
+                if (LOGIN_NEEDED.containsMatchIn(msg)) return "blocked" to "로그인이 필요합니다. 먼저 로그인해 두세요. (${msg.take(40)})"
+                if (PICK_AGAIN.containsMatchIn(msg)) return "pick_again" to msg
                 return (if (NOT_OPEN.containsMatchIn(msg)) "not_open" else "blocked") to msg
+            }
+            page.loginPopup().takeIf { it.isNotEmpty() }?.let {
+                return "blocked" to "로그인이 필요합니다. 먼저 로그인해 두세요. (${it.take(40)})"
+            }
+            if (site.picksSchedule && allowPick) {
+                // Melon mobile: 예매하기 opened the schedule sheet; tap the chosen one (a real touch:
+                // the site ignores script clicks there) and keep watching.
+                val r = page.schedule(config.keywords)
+                val status = r?.optString("status")
+                if (status != lastSheet) {
+                    trace("    회차 시트: $status (누른 뒤 %.0f ms)".format((localNow() - start) * 1000))
+                    lastSheet = status
+                }
+                when (status) {
+                    "tap" -> {
+                        touch(r.optDouble("x").toFloat(), r.optDouble("y").toFloat())
+                        return "picked" to r.optString("picked")
+                    }
+                    "ambiguous" -> return "blocked" to ambiguousText(r)
+                }
             }
             if (page.popupCount() > popupsBefore) return "not_open" to page.dismissLast()
             if (windowCount() > windowsBefore) return "opened" to "새 창"
@@ -160,17 +188,42 @@ class Booker(
         return "unknown" to ""
     }
 
+    private fun ambiguousText(r: JSONObject): String {
+        val options = r.optJSONArray("options")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty()
+        return "${r.optString("what")}를 정할 수 없습니다. 키워드를 확인하세요: " + options.joinToString(" / ")
+    }
+
+    /** Pick Melon's date/time on the PC-style lists. Returns (done|none|ambiguous, detail). */
+    private suspend fun pickSchedule(timeout: Double = 3.0): Pair<String, String> {
+        val end = localNow() + timeout
+        while (localNow() < end) {
+            val r = page.schedule(config.keywords)
+            when (r?.optString("status")) {
+                "done" -> return "done" to r.optString("picked")
+                "ambiguous" -> return "ambiguous" to ambiguousText(r)
+                "none", "tap" -> return "none" to ""
+            }
+            delay(30)
+        }
+        return "none" to "회차 목록이 늦게 떠서 그대로 누릅니다"
+    }
+
     suspend fun run(offset: Offset): Outcome {
         this.offset = offset
         val (_, openAt, labels, keywords, reloadAfter, giveUpAfter, early) = config
         val lead = if (early) offset.lead() else 0.0
         if (early) log("  미리 누르기: %.0f ms 일찍 누릅니다".format(lead * 1000))
         val pressAt = openAt - lead
+        log("  사이트: ${site.name}")
+        if (site.picksSchedule) {
+            log(if (keywords.isNotEmpty()) "  회차 키워드: ${keywords.joinToString(" ")}"
+                else "  ⚠ 회차 키워드(예: 10월 24일 18시)가 없어 회차가 하나뿐일 때만 고릅니다.")
+        }
 
         waitUntil(openAt - 60, "로그인 확인")
         checkLogin()
         waitUntil(openAt - 10, "버튼 감시 시작")
-        val cands = page.describe(labels, keywords)
+        val cands = page.describe(labels, buttonKeywords)
         if (cands.size > 1 || keywords.isNotEmpty()) {
             log("  페이지의 예매 버튼 ${cands.size}개" + if (keywords.isNotEmpty()) " (키워드: ${keywords.joinToString(" ")})" else "")
             for (c in cands) log("  ${if (c.match) "▶" else " "} ${c.card.take(70)}")
@@ -179,9 +232,18 @@ class Booker(
         dialogs.clear()
         armed = true
 
-        val first = page.tick(labels, keywords, scroll = true)?.takeIf { it.found }?.state
+        val first = page.tick(labels, buttonKeywords, scroll = true)?.takeIf { it.found }?.state
+        // No button yet (Melon shows it only after the opening): reload right at the opening.
+        val reloadAtOpen = first == null
+        var scheduleReady = false
+        if (site.picksSchedule && first != null) {
+            // The button is already there: pick the date/time now instead of after the opening.
+            val (status, detail) = pickSchedule()
+            if (status == "done") { log("  회차 미리 선택: $detail"); scheduleReady = true }
+            else if (status == "ambiguous") log("  ⚠ $detail")
+        }
         when (first) {
-            null -> log("  조건에 맞는 예매 버튼이 아직 없습니다. 오픈 시각부터 찾습니다.")
+            null -> log("  예매 버튼이 아직 없습니다. 오픈 시각에 바로 새로고침해서 찾습니다.")
             "ready" -> {
                 // 재오픈(N차) 공연 등: 버튼이 이미 열려 있으면 정각에 누른다.
                 log("  버튼이 이미 활성 상태입니다. 오픈 시각 정각에 누릅니다.")
@@ -199,7 +261,7 @@ class Booker(
         while (!clicked) {
             val now = offset.serverNow()
             if (now > openAt + giveUpAfter) break
-            val t = page.tick(labels, keywords, scroll = true)
+            val t = page.tick(labels, buttonKeywords, scroll = true)
             val state = if (t != null && t.found) t.state else "disabled"
             if (prevState == "pending" && state == "ready") {
                 // 표시가 내 시계가 아니라 사이트 시계로 사라지는지 예행연습 기록으로 확인한다.
@@ -213,6 +275,12 @@ class Booker(
                     delay(50)
                     continue
                 }
+                if (site.picksSchedule && !scheduleReady) {
+                    val (status, detail) = pickSchedule()
+                    if (status == "ambiguous") { blocked = detail; log("  알림: $detail"); break }
+                    if (status == "done") log("  회차 선택: $detail")
+                    scheduleReady = true
+                }
                 val windowsBefore = windowCount()
                 val urlBefore = web.url.orEmpty()
                 if (t.inView && t.hit) touch(t.x, t.y)
@@ -221,7 +289,19 @@ class Booker(
                 traceUntil = localNow() + TRACE_FOR
                 val clickedAt = offset.serverNow()
                 log("  클릭 ${tries}회째 (오픈 기준 %+.0f ms)".format((clickedAt - openAt) * 1000) + if (t.inView && t.hit) "" else " · 스크립트 클릭")
-                val (result, detail) = afterClick(windowsBefore, urlBefore, t.popups)
+                var (result, detail) = afterClick(windowsBefore, urlBefore, t.popups)
+                if (result == "picked") {
+                    // Only once per press: the sheet stays on screen while it closes.
+                    log("  회차 선택: $detail")
+                    val next = afterClick(windowsBefore, urlBefore, t.popups, allowPick = false)
+                    result = next.first
+                    detail = next.second
+                }
+                if (result == "pick_again") {
+                    log("  '$detail' → 회차를 다시 고르고 누릅니다")
+                    scheduleReady = false
+                    continue
+                }
                 if (result == "not_open") {
                     log("  '오픈 전' 응답 → 닫고 다시 누릅니다 ($detail)")
                     delay(150)
@@ -245,10 +325,11 @@ class Booker(
             // 오픈 후 reloadAfter 초가 지나도 안 열리면 새로고침 (그 뒤로도 같은 간격으로)
             val last = reloadedAt ?: openAt
             val reloading = reloadStartedAt?.let { localNow() - it < 10 } ?: false
-            if (now > last + reloadAfter && !reloading) {
+            if (((reloadAtOpen && reloadedAt == null && now >= pressAt) || now > last + reloadAfter) && !reloading) {
                 log("  버튼이 아직 열리지 않음 → 새로고침")
                 reloadStartedAt = localNow()
                 waitedForScroll = false
+                scheduleReady = false
                 web.reload()
                 continue
             }
@@ -272,10 +353,8 @@ class Booker(
             (u.host + u.path).take(120)
         }.getOrDefault(url.take(120))
 
-        // Cookies a logged-out visit to NOL already gets; anything login-like beyond these
-        // suggests a session. The real login cookie name is not known yet (see the log's list).
-        private val GUEST_COOKIES = setOf("nol_platform", "nol_device_id", "nol_app_version", "app-device",
-            "cgntId", "yanolja_sid", "cf_clearance", "__cf_bm")
+        // Anything login-like beyond a site's guest cookies suggests a session. The real login
+        // cookie names are not known yet (see the log's list).
         private val LOGIN_COOKIE = Regex("access|refresh|token|auth|login|member|jwt|sso|_at$|_rt$", RegexOption.IGNORE_CASE)
 
         // If a press sends nothing to the server within this time, the page ignored it.

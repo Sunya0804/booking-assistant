@@ -172,7 +172,7 @@ class App:
             entry.bind("<FocusOut>", handler)
             entry.bind("<Return>", handler)
         self.field(form, 5, 0, "경기 / 회차 키워드", self.keyword_var, colspan=2,
-                   hint="버튼이 여러 개일 때 카드의 글자 · 예: 3차전, 10월 21일")
+                   hint="NOL: 버튼이 여러 개일 때 카드의 글자 (예: 3차전) · 멜론: 날짜·시각 (예: 10월 24일 18시)")
         self.adv_open = tk.BooleanVar(value=False)
         self.adv_toggle = ttk.Button(form, text="▸  고급 설정", command=self.toggle_advanced, style="Text.TButton")
         ttk.Checkbutton(form, text="미리 누르기", variable=self.early_var, style="Card.TCheckbutton").grid(

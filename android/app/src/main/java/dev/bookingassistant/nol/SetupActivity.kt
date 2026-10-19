@@ -194,7 +194,7 @@ class SetupActivity : AppCompatActivity(), CoroutineScope by MainScope() {
             endIconContentDescription = "시각 선택"
             setEndIconOnClickListener { pickTime() }
         }
-        keywords = field(col, "경기 / 회차 키워드", settings.get("keywords", ""), "예: 3차전 · 여러 단어가 모두 포함된 카드를 고릅니다.", InputType.TYPE_CLASS_TEXT)
+        keywords = field(col, "경기 / 회차 키워드", settings.get("keywords", ""), "NOL: 카드의 글자 (예: 3차전) · 멜론: 날짜·시각 (예: 10월 24일 18시)", InputType.TYPE_CLASS_TEXT)
         early = MaterialCheckBox(this).apply {
             text = "미리 누르기"
             isChecked = settings.get("early_press", "false") == "true"

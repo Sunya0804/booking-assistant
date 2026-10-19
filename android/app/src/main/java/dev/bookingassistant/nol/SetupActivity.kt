@@ -8,6 +8,14 @@ import com.google.android.material.datepicker.MaterialDatePicker
 import com.google.android.material.timepicker.MaterialTimePicker
 import com.google.android.material.timepicker.TimeFormat
 import com.google.android.material.checkbox.MaterialCheckBox
+import com.google.android.material.materialswitch.MaterialSwitch
+import com.google.android.material.slider.Slider
+import android.Manifest
+import android.app.NotificationManager
+import android.content.ActivityNotFoundException
+import android.content.pm.PackageManager
+import android.os.Build
+import android.provider.AlarmClock
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import java.time.ZoneOffset
 import java.time.LocalTime
@@ -51,6 +59,12 @@ class SetupActivity : AppCompatActivity(), CoroutineScope by MainScope() {
     private lateinit var labels: EditText
     private lateinit var reloadAfter: EditText
     private lateinit var early: MaterialCheckBox
+    private lateinit var alarmOn: MaterialSwitch
+    private lateinit var alarmMinutes: EditText
+    private lateinit var alarmVolume: Slider
+    private lateinit var alarmStatus: TextView
+    private var preview: AlarmSound? = null
+    private lateinit var previewBtn: com.google.android.material.button.MaterialButton
     private lateinit var updateStatus: TextView
     private lateinit var updater: Updater
     private var offset: Offset? = null
@@ -89,10 +103,12 @@ class SetupActivity : AppCompatActivity(), CoroutineScope by MainScope() {
     override fun onResume() {
         super.onResume()
         updater.onResume()
+        refreshAlarm()
     }
 
     override fun onPause() {
         super.onPause()
+        stopPreview()
         updater.onPause()
         save()
     }
@@ -188,6 +204,7 @@ class SetupActivity : AppCompatActivity(), CoroutineScope by MainScope() {
         col.addView(small("요청이 서버에 닿는 시간만큼 일찍 눌러 정각에 도착하게 합니다 (최대 150 ms)").apply {
             setPadding(dp(4), 0, 0, 0)
         })
+        col.addView(alarmCard(), LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(16) })
         val advanced = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         val expand = action("고급 설정  ▾", palette, "text")
         expand.setOnClickListener {
@@ -221,6 +238,132 @@ class SetupActivity : AppCompatActivity(), CoroutineScope by MainScope() {
             isFillViewport = true
             addView(col)
             padForSystemBars()
+        }
+    }
+
+    /** 오픈 전 알람: 켜기, 몇 분 전, 크기, 미리 듣기, 시계 앱에 추가. */
+    private fun alarmCard(): LinearLayout {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = surface(palette.surface, 16)
+            setPadding(dp(16), dp(8), dp(16), dp(16))
+        }
+        alarmOn = MaterialSwitch(this).apply {
+            text = "오픈 전 알람"
+            textSize = 15f
+            isChecked = settings.get(OpenAlarm.KEY_ON, "false") == "true"
+            setTextColor(palette.logFg)
+            setOnCheckedChangeListener { _, on ->
+                if (on) askAlarmPermissions()
+                save()
+            }
+        }
+        card.addView(alarmOn, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        card.addView(small("앱을 꺼 두어도 오픈 시각 전에 알람이 울립니다. 진동도 함께 울립니다."))
+        alarmMinutes = field(card, "몇 분 전", settings.get(OpenAlarm.KEY_MINUTES, OpenAlarm.DEFAULT_MINUTES),
+            "1~120분", InputType.TYPE_CLASS_NUMBER)
+        val volumeLabel = small("")
+        alarmVolume = Slider(this).apply {
+            valueFrom = 0f
+            valueTo = 100f
+            stepSize = 5f
+            value = (OpenAlarm.volume(settings) / 5 * 5).toFloat()
+            setLabelFormatter { "${it.toInt()}%" }
+            addOnChangeListener { _, v, _ -> volumeLabel.text = "알람 크기 ${v.toInt()}%" }
+            addOnSliderTouchListener(object : Slider.OnSliderTouchListener {
+                override fun onStartTrackingTouch(slider: Slider) {}
+                override fun onStopTrackingTouch(slider: Slider) {
+                    save()
+                    if (preview != null) startPreview() // 듣는 중이면 바꾼 크기로 다시 들려준다
+                }
+            })
+        }
+        volumeLabel.text = "알람 크기 ${alarmVolume.value.toInt()}%"
+        volumeLabel.setPadding(0, dp(12), 0, 0)
+        card.addView(volumeLabel)
+        card.addView(alarmVolume, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        val buttons = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        previewBtn = action("미리 듣기", palette, "text").apply {
+            setOnClickListener { if (preview == null) startPreview() else stopPreview() }
+        }
+        buttons.addView(previewBtn)
+        buttons.addView(action("시계 앱에도 추가", palette, "text").apply {
+            setOnClickListener { addToClockApp() }
+        })
+        card.addView(buttons)
+        alarmStatus = small("").apply { setTextColor(palette.accent) }
+        card.addView(alarmStatus)
+        return card
+    }
+
+    private fun startPreview() {
+        val sound = preview ?: AlarmSound(this).also { preview = it }
+        sound.start(alarmVolume.value.toInt())
+        previewBtn.text = "멈추기"
+        // 미리 듣기는 4초만
+        alarmStatus.removeCallbacks(previewTimeout)
+        alarmStatus.postDelayed(previewTimeout, 4000)
+    }
+
+    private val previewTimeout = Runnable { stopPreview() }
+
+    private fun stopPreview() {
+        preview?.stop()
+        preview = null
+        alarmStatus.removeCallbacks(previewTimeout)
+        previewBtn.text = "미리 듣기"
+    }
+
+    /** Notifications (Android 13+) are needed to show the alarm and its stop button. */
+    private fun askAlarmPermissions() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
+        }
+    }
+
+    private fun refreshAlarm() {
+        var text = OpenAlarm.schedule(this)
+        if (alarmOn.isChecked && Build.VERSION.SDK_INT >= 34 &&
+            !getSystemService(NotificationManager::class.java).canUseFullScreenIntent()) {
+            text += "\n잠금 화면에 알람 화면을 띄우려면 설정에서 '전체 화면 알림'을 허용하세요."
+        }
+        alarmStatus.text = text
+    }
+
+    /**
+     * The phone's clock app as a backup. It takes only hour and minute, so it rings at the
+     * next such time; warn when the opening is further away than that.
+     */
+    private fun addToClockApp() {
+        save()
+        val openAt = parseOpenAt(date.text.toString(), time.text.toString())
+            ?: return fail("오픈 날짜/시각을 확인하세요.")
+        val minutes = OpenAlarm.minutes(settings)
+        val atMs = (openAt * 1000).toLong() - minutes * 60_000L
+        if (atMs <= System.currentTimeMillis()) return fail("알람 시각(오픈 ${minutes}분 전)이 이미 지났습니다.")
+        // The clock app reads hour/minute in the phone's own time zone.
+        val at = Instant.ofEpochMilli(atMs).atZone(java.time.ZoneId.systemDefault())
+        val add = {
+            val intent = Intent(AlarmClock.ACTION_SET_ALARM)
+                .putExtra(AlarmClock.EXTRA_HOUR, at.hour)
+                .putExtra(AlarmClock.EXTRA_MINUTES, at.minute)
+                .putExtra(AlarmClock.EXTRA_MESSAGE, "NOL 예매 ${minutes}분 전")
+            try {
+                startActivity(intent)
+            } catch (e: ActivityNotFoundException) {
+                fail("알람을 받을 시계 앱을 찾지 못했습니다.")
+            }
+        }
+        val hoursAway = (at.toEpochSecond() - Instant.now().epochSecond) / 3600.0
+        if (hoursAway > 24) {
+            MaterialAlertDialogBuilder(this)
+                .setMessage("시계 앱 알람은 날짜를 정할 수 없어 다음 %02d:%02d에 울립니다. 오픈이 하루 넘게 남았으니, 오픈 전날 이후에 추가하는 것이 좋습니다.\n\n그래도 지금 추가할까요?".format(at.hour, at.minute))
+                .setPositiveButton("추가") { _, _ -> add() }
+                .setNegativeButton("취소", null)
+                .show()
+        } else {
+            add()
         }
     }
 
@@ -303,7 +446,11 @@ class SetupActivity : AppCompatActivity(), CoroutineScope by MainScope() {
             "labels" to labels.text.toString(),
             "reload_after" to reloadAfter.text.toString(),
             "early_press" to early.isChecked.toString(),
+            OpenAlarm.KEY_ON to alarmOn.isChecked.toString(),
+            OpenAlarm.KEY_MINUTES to (alarmMinutes.text.toString().toIntOrNull()?.coerceIn(1, 120)?.toString() ?: OpenAlarm.DEFAULT_MINUTES),
+            OpenAlarm.KEY_VOLUME to alarmVolume.value.toInt().toString(),
         ))
+        refreshAlarm()
     }
 
     private fun pageUrl(): String? {

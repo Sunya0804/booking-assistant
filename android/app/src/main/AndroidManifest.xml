@@ -36,6 +36,10 @@
         </activity>
 
         <activity
+            android:name=".LogsActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".BookingActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode"

@@ -62,7 +62,6 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
         const val EXTRA_KEYWORDS = "keywords"
         const val EXTRA_RELOAD_AFTER = "reload_after"
         const val EXTRA_EARLY = "early"
-        private const val KEEP_LOGS = 30
     }
 
     private lateinit var palette: Palette
@@ -78,8 +77,8 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
     private lateinit var bar: LinearLayout
     private lateinit var banner: TextView
     private lateinit var disclosure: ImageButton
-    private lateinit var shareBtn: MaterialButton
     private var statusKey = "idle"
+    private var stopped = false
     private var bannerShown = false
     private val popups = mutableListOf<WebView>()   // windows the page opened (window.open)
     private var booker: Booker? = null
@@ -113,8 +112,7 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
                 early = intent.getBooleanExtra(EXTRA_EARLY, false),
             )
             openAt = config.openAt
-            logFile = newLogFile()
-            shareBtn.visibility = View.VISIBLE
+            logFile = RunLogs.start(this, url, config.openAt)
             booker = Booker(web, config, ::log, { popups.size }, ::trace, ::cookieNames, ::warn)
             job = launch { book(config) }
         } else {
@@ -179,6 +177,7 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
     }
 
     override fun onDestroy() {
+        logFile?.let { RunLogs.finish(it, runResult()) }
         cancel()
         popups.forEach { it.destroy() }
         web.destroy()
@@ -247,14 +246,6 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
             contentDescription = "진행 기록 펼치기"
             setOnClickListener { toggleLog() }
         }
-        shareBtn = action("기록 공유", palette, "text").apply {
-            textSize = 12.5f
-            minimumHeight = 0
-            minHeight = 0
-            visibility = View.GONE
-            setOnClickListener { shareLog() }
-        }
-        logRow.addView(shareBtn, LinearLayout.LayoutParams(WRAP_CONTENT, dp(32)))
         logRow.addView(disclosure, LinearLayout.LayoutParams(dp(44), dp(36)))
         bar.addView(logRow)
         logView = text("", palette, 13f, palette.text).apply {
@@ -296,7 +287,6 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
         logView.setTextColor(palette.text)
         logScroll.background = rounded(palette.tile, 12)
         disclosure.imageTintList = ColorStateList.valueOf(palette.muted)
-        shareBtn.setTextColor(palette.accent)
         chip.chip(palette, statusKey)
         val (bg, fg) = if (intent.hasExtra(EXTRA_OPEN_AT)) palette.dangerBg to palette.danger else palette.accentSoft to palette.accent
         val states = arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf())
@@ -340,20 +330,12 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
         disclosure.contentDescription = if (expanded) "진행 기록 접기" else "진행 기록 펼치기"
     }
 
-    private fun newLogFile(): File {
-        val dir = File(filesDir, "logs").apply { mkdirs() }
-        dir.listFiles()?.sortedBy { it.name }?.dropLast(KEEP_LOGS - 1)?.forEach { it.delete() }
-        val name = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").withZone(KST).format(Instant.now())
-        return File(dir, "run-$name.txt")
-    }
-
-    /** Send this run's log to another app (메모, 카카오톡, 메일…). */
-    private fun shareLog() {
-        val text = logFile?.takeIf { it.exists() }?.readText() ?: logView.text.toString()
-        val send = Intent(Intent.ACTION_SEND).setType("text/plain")
-            .putExtra(Intent.EXTRA_SUBJECT, "NOL 예매도우미 기록 ${logFile?.name.orEmpty()}")
-            .putExtra(Intent.EXTRA_TEXT, text)
-        startActivity(Intent.createChooser(send, "기록 공유"))
+    /** How the run ended, for the saved log (see RunLogs). */
+    private fun runResult() = when {
+        statusKey == "done" -> "클릭 완료"
+        statusKey == "fail" -> "확인 필요"
+        stopped -> "중지"
+        else -> "진행 중 닫음"
     }
 
     /** A line for the log file only; called from WebView threads too. */
@@ -396,6 +378,7 @@ class BookingActivity : AppCompatActivity(), CoroutineScope by MainScope() {
     }
 
     private fun stop() {
+        stopped = true
         job?.cancel()
         booker?.disarm()
         showStatus("idle")

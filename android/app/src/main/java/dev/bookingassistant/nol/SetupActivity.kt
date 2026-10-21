@@ -226,6 +226,13 @@ class SetupActivity : AppCompatActivity(), CoroutineScope by MainScope() {
             contentDescription = "테마 고르기"
             setOnClickListener { pickTheme() }
         }, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginStart = dp(4) })
+        bar.addView(ImageButton(this).apply {
+            setImageResource(R.drawable.ic_history)
+            imageTintList = ColorStateList.valueOf(palette.label)
+            background = rounded(android.graphics.Color.TRANSPARENT, 12)
+            contentDescription = "저장된 기록"
+            setOnClickListener { startActivity(Intent(this@SetupActivity, LogsActivity::class.java)) }
+        }, LinearLayout.LayoutParams(dp(48), dp(48)))
         return bar
     }
 
